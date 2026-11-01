@@ -240,21 +240,11 @@ PAGE = r"""<!doctype html>
       </select>
     </div>
 
-    <div class="side-label">Colab</div>
-    <div class="field">
-      <label for="colabUrl">URL ពី Colab</label>
-      <input type="text" id="colabUrl" inputmode="url" autocomplete="off" spellcheck="false"
-             placeholder="https://xxxx.trycloudflare.com" />
-    </div>
-    <div class="field">
-      <label for="colabKey">API key (ស្រេចចិត្ត)</label>
-      <input type="password" id="colabKey" autocomplete="off" spellcheck="false"
-             placeholder="ទុកទទេ បើ server មិនទាមទារ key" />
-    </div>
+    <div class="side-label">Kaggle / Colab</div>
+    <div class="conn" id="connStatus"><span class="dot"></span>រង់ចាំ server …</div>
     <div class="side-actions">
-      <button class="ghost" id="connectBtn">🔌 ភ្ជាប់ និងសាកល្បង</button>
+      <button class="ghost" id="copyCmd">📋 ចម្លងបន្ទាត់ Kaggle</button>
     </div>
-    <div class="conn" id="connStatus"><span class="dot"></span>មិនទាន់ភ្ជាប់ — ប្រើ server របស់គេហទំព័រនេះ</div>
     <label class="toggle" for="webSearch">
       <span>🌐 ស្វែងរកអ៊ីនធឺណិត</span>
       <input type="checkbox" id="webSearch" checked />
@@ -332,11 +322,8 @@ PAGE = r"""<!doctype html>
   const imageMode = $("#imageMode");
   const modePill = $("#modePill");
   const topTitle = $("#topTitle");
-  const colabUrlEl = $("#colabUrl");
-  const colabKeyEl = $("#colabKey");
   const connStatusEl = $("#connStatus");
   const STORE = "buffy-ai-chat-v2";
-  const STORE_CONN = "buffy-ai-colab-v1";
 
   const state = { messages: [], attachments: [], busy: false, controller: null };
 
@@ -369,93 +356,46 @@ PAGE = r"""<!doctype html>
     } catch (e) { /* ignore */ }
   }
 
-  /* ---------------- Colab connection (URL + API key) ---------------- */
-  /* The model runs in Google Colab, behind a public trycloudflare link the
-     notebook prints together with an API key. Both are kept only in this
-     browser's localStorage and sent with each request. */
-  function colabBase() {
-    return (colabUrlEl.value || "").trim().replace(/\/+$/, "");
-  }
-  function colabKey() {
-    return (colabKeyEl.value || "").trim();
-  }
-  function endpoint(path) {
-    const base = colabBase();
-    return base ? base + path : path;
-  }
-  function requestHeaders(json) {
-    const h = json ? { "Content-Type": "application/json" } : {};
-    const key = colabKey();
-    if (key) h["Authorization"] = "Bearer " + key;
-    return h;
-  }
+  /* -------- Auto-connection to the GPU server (no fields to fill) -------- */
+  /* The Kaggle/Colab script POSTs its tunnel URL to this server, so nothing is
+     pasted in the browser. We only poll /api/health and colour the dot. */
+  function endpoint(path) { return path; }
+  function requestHeaders(json) { return json ? { "Content-Type": "application/json" } : {}; }
   function setConn(text, kind) {
     connStatusEl.className = "conn" + (kind ? " " + kind : "");
     connStatusEl.innerHTML = '<span class="dot"></span>' + esc(text || "");
   }
-  function saveConn() {
+  async function pollConnection() {
     try {
-      localStorage.setItem(STORE_CONN, JSON.stringify({ url: colabUrlEl.value.trim(), key: colabKeyEl.value.trim() }));
-    } catch (e) { /* quota, ignore */ }
-  }
-  function loadConn() {
-    try {
-      const d = JSON.parse(localStorage.getItem(STORE_CONN) || "{}");
-      if (d.url) colabUrlEl.value = d.url;
-      if (d.key) colabKeyEl.value = d.key;
-    } catch (e) { /* ignore */ }
-    if (colabBase()) setConn("ភ្ជាប់ទៅ " + colabBase());
-  }
-
-  /* The notebook prints «URL : …» and «API key : …»; pasting either line into
-     either box fills both. */
-  function parseColabPaste(text) {
-    const out = {};
-    const url = (text.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/i) || [])[0];
-    if (url) out.url = url.replace(/\/+$/, "");
-    const key = text.match(/(?:api[ _-]?key|key)\s*[:=]\s*([A-Za-z0-9_\-]{6,})/i);
-    if (key) out.key = key[1];
-    return out;
-  }
-  function onConnPaste(event) {
-    const raw = (event.clipboardData || window.clipboardData).getData("text") || "";
-    const parsed = parseColabPaste(raw);
-    if (!parsed.url && !parsed.key) return;
-    event.preventDefault();
-    if (parsed.url) colabUrlEl.value = parsed.url;
-    if (parsed.key) colabKeyEl.value = parsed.key;
-    saveConn();
-    setConn("កំពុងភ្ជាប់…");
-    testConnection();
-  }
-  colabUrlEl.addEventListener("paste", onConnPaste);
-  colabKeyEl.addEventListener("paste", onConnPaste);
-
-  async function testConnection() {
-    const base = colabBase();
-    if (!base) { setConn("សូម paste URL ពី Colab សិន", "bad"); return false; }
-    setConn("កំពុងភ្ជាប់…");
-    try {
-      const res = await fetch(base + "/api/health", { headers: requestHeaders(false) });
-      if (res.status === 401) throw new Error("API key មិនត្រឹមត្រូវ");
-      if (!res.ok) throw new Error("HTTP " + res.status);
-      const data = await res.json();
-      if (data.model && modelSel.options[0]) {
-        modelSel.options[0].textContent = data.model + " · ក្នុង Colab";
+      const res = await fetch("/api/health", { cache: "no-store" });
+      const d = await res.json();
+      const r = d.remote || {};
+      if (r.alive) {
+        setConn("ភ្ជាប់ស្វ័យប្រវត្តិ · server GPU ដំណើរការ", "ok");
+      } else if (r.url) {
+        setConn("បានចុះทะเบียน តែ server មិនឆ្លើយ — ពិនិត្យ Kaggle", "bad");
+      } else if (d.image === "comfyui") {
+        setConn("server នេះមាន GPU ដោយខ្លួនឯង", "ok");
+      } else {
+        setConn("រង់ចាំ Kaggle/Colab — run បន្ទាត់តែមួយ វាភ្ជាប់ឯង", "");
       }
-      setConn("✅ បានភ្ជាប់ · " + (data.model || "ម៉ូដែល local"), "ok");
-      return true;
-    } catch (err) {
-      setConn("❌ មិនភ្ជាប់បាន — " + (err.message || err), "bad");
-      return false;
+    } catch (e) {
+      setConn("មិនអាចភ្ជាប់ទៅ server", "bad");
     }
   }
-  $("#connectBtn").onclick = async () => {
-    saveConn();
-    await testConnection();
+  const KAGGLE_CMD = "!curl -fsSL -o /kaggle/working/buffy-image-start.sh https://raw.githubusercontent.com/hengfb361-design/buffy-ai/main/kaggle-start.sh && bash /kaggle/working/buffy-image-start.sh";
+  const copyBtn = $("#copyCmd");
+  if (copyBtn) copyBtn.onclick = async () => {
+    try {
+      await navigator.clipboard.writeText(KAGGLE_CMD);
+      copyBtn.textContent = "✅ ចម្លងរួច";
+      setTimeout(() => { copyBtn.textContent = "📋 ចម្លងបន្ទាត់ Kaggle"; }, 2000);
+    } catch (e) {
+      setConn("ចម្លងស្វ័យប្រវត្តិមិនបាន — សូមថតដោយដៃ", "bad");
+    }
   };
-  colabUrlEl.addEventListener("change", saveConn);
-  colabKeyEl.addEventListener("change", saveConn);
+  pollConnection();
+  setInterval(pollConnection, 15000);
 
   /* ---------------- rendering ---------------- */
   function hideEmpty() { if (emptyEl && emptyEl.parentNode) emptyEl.remove(); }
@@ -791,7 +731,6 @@ PAGE = r"""<!doctype html>
 
   /* boot */
   load();
-  loadConn();
   bindChips(document);
   updateMode();
   renderAll();

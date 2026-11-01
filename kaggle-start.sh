@@ -212,14 +212,29 @@ for _ in $(seq 1 60); do
 done
 [ -n "$PUBLIC_URL" ] || die "tunnel មិនចេញ URL — សូមមើល $WORK/tunnel.log"
 
+# ─── ចុះทะเบียน URL ទៅ website (ដូច្នេះមិនត្រូវ paste អ្វីទាំងអស់) ─────────────
+SITE_URL="${BUFFY_SITE_URL:-https://buffy-ai.onrender.com}"
+register_url() {
+  curl -fsS -m 20 -X POST "$SITE_URL/api/register" \
+    -H "Content-Type: application/json" \
+    -d "{\"url\":\"$PUBLIC_URL\",\"key\":\"${TUNNEL_TOKEN:-}\"}" >/dev/null 2>&1
+}
+if register_url; then
+  ok "បានចុះทะเบียนទៅ $SITE_URL — website ភ្ជាប់ស្វ័យប្រវត្តិ"
+else
+  warn "ចុះทะเบียนស្វ័យប្រវត្តិមិនបាន — បើក $PUBLIC_URL ដោយផ្ទាល់ក៏បាន"
+fi
+# keep-alive៖ រាល់ ៦០ វិនាទី (បើ site restart វាដឹង URL ថ្មីវិញ)
+( while :; do sleep 60; register_url || true; done ) >/dev/null 2>&1 &
+
 printf '\n\033[1;32m%s\033[0m\n' "════════════════════════════════════════════════════════════════"
 printf '\033[1;32m🎨 បង្កើតរូបភាពរួចរាល់\033[0m\n\n'
 printf '   Model : \033[1m%s\033[0m\n' "$LABEL"
 printf '   URL   : \033[1m%s\033[0m\n' "$PUBLIC_URL"
 printf '\033[1;32m%s\033[0m\n' "════════════════════════════════════════════════════════════════"
-printf '   ១) website → sidebar → Colab → paste URL ខាងលើ (គ្មាន key)\n'
-printf '   ២) ចុច «🔌 ភ្ជាប់ និងសាកល្បង» → ចំណុច \033[1;34mខៀវ\033[0m = ភ្ជាប់រួច\n'
-printf '   ៣) បើក «🎨 បង្កើតរូបភាព» → សរសេរ prompt → ផ្ញើ\n\n'
+printf '   website ភ្ជាប់ស្វ័យប្រវត្តិ — មិនត្រូវ paste អ្វីទាំងអស់។\n'
+printf '   បើក \033[1m%s\033[0m → ចំណុច \033[1;34mខៀវ\033[0m នឹងឡើងឯង\n' "$SITE_URL"
+printf '   រួចបើក «🎨 បង្កើតរូបភាព» → សរសេរ prompt → ផ្ញើ\n\n'
 printf '\033[1;33m⚠️  កុំបិទ cell នេះ — កម្មវិធីរត់ពេល cell នៅរត់។\033[0m\n'
 
 while :; do sleep 30; done

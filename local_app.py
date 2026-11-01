@@ -31,6 +31,7 @@ import base64
 import hmac
 import json
 import os
+import threading
 import time
 import traceback
 from urllib.parse import quote_plus, urlparse
@@ -232,6 +233,40 @@ def _workflow(prompt: str, negative: str, width: int, height: int, seed: int) ->
     }
 
 
+# ─── Auto-connect registry ──────────────────────────────────────────────────
+# The Colab/Kaggle script POSTs its public tunnel URL to /api/register, so the
+# website finds the GPU server on its own. In memory only: re-running the
+# one-line script simply registers a new URL.
+_REMOTE = {"url": "", "ts": 0.0}
+_PROBE = {"ts": 0.0, "ok": False}
+_REMOTE_LOCK = threading.Lock()
+TUNNEL_TOKEN = os.environ.get("TUNNEL_TOKEN", "").strip()
+PROBE_TTL = 10.0
+
+
+def remote_url() -> str:
+    with _REMOTE_LOCK:
+        return _REMOTE["url"]
+
+
+def remote_alive() -> bool:
+    """Cheap liveness probe, cached for PROBE_TTL seconds."""
+    url = remote_url()
+    if not url:
+        return False
+    now = time.time()
+    with _REMOTE_LOCK:
+        if now - _PROBE["ts"] < PROBE_TTL:
+            return _PROBE["ok"]
+    try:
+        ok = requests.get(url + "/api/health", timeout=4).ok
+    except Exception:  # noqa: BLE001
+        ok = False
+    with _REMOTE_LOCK:
+        _PROBE.update(ts=now, ok=ok)
+    return ok
+
+
 def image_ready() -> bool:
     """True when a ComfyUI instance is reachable next to this server."""
     if not IMAGE_BASE_URL:
@@ -427,10 +462,49 @@ def chat_stream(req: ChatRequest):
         yield sse({"type": "done"})
 
 
+@app.post("/api/register")
+def register(payload: dict):
+    """A Colab/Kaggle session registers its public tunnel URL here so the
+    website can reach that GPU server without anyone pasting a URL."""
+    url = (payload.get("url") or "").strip().rstrip("/")
+    key = (payload.get("key") or "").strip()
+    if TUNNEL_TOKEN and not hmac.compare_digest(key, TUNNEL_TOKEN):
+        return JSONResponse({"detail": "token មិនត្រឹមត្រូវ"}, status_code=401)
+    # https only in production; loopback is allowed so the flow can be tested.
+    if not (url.startswith("https://") or "127.0.0.1" in url or "localhost" in url):
+        return JSONResponse({"detail": "url ត្រូវចាប់ផ្តើមដោយ https://"}, status_code=400)
+    with _REMOTE_LOCK:
+        _REMOTE["url"] = url
+        _REMOTE["ts"] = time.time()
+        _PROBE.update(ts=0.0, ok=False)
+    return {"ok": True, "url": url}
+
+
 @app.post("/api/chat")
 def chat(req: ChatRequest, request: Request):
     if ACCESS_KEY and not _same_origin(request) and not _key_ok(request):
         return _unauthorized()
+    upstream = remote_url()
+    if upstream:
+        body = req.model_dump() if hasattr(req, "model_dump") else req.dict()
+        try:
+            r = requests.post(upstream + "/api/chat", json=body, stream=True,
+                              timeout=(10, 900))
+            if r.status_code == 200:
+                def relay():
+                    for chunk in r.iter_content(512):
+                        if chunk:
+                            yield chunk
+
+                return StreamingResponse(
+                    relay(),
+                    media_type="text/event-stream",
+                    headers={"Cache-Control": "no-cache, no-transform",
+                             "X-Accel-Buffering": "no"},
+                )
+            r.close()
+        except Exception:  # noqa: BLE001
+            traceback.print_exc()
     return StreamingResponse(
         chat_stream(req),
         media_type="text/event-stream",
@@ -466,6 +540,7 @@ def health(request: Request):
         "access_key_required": bool(ACCESS_KEY),
         "web_search": "exa" if EXA_API_KEY else "off",
         "image": "comfyui" if image_ready() else "off",
+        "remote": {"url": remote_url(), "alive": remote_alive()},
     }
 
 

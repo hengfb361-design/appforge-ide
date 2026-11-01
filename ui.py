@@ -255,6 +255,11 @@ PAGE = r"""<!doctype html>
       <input type="checkbox" id="imageMode" />
       <i class="switch"></i>
     </label>
+    <label class="toggle" for="imageFast">
+      <span>⚡ លឿន (១២ ជំហាន)</span>
+      <input type="checkbox" id="imageFast" checked />
+      <i class="switch"></i>
+    </label>
 
     <div class="side-actions">
       <button class="ghost" id="downloadChat">⬇️ ទាញយក</button>
@@ -564,6 +569,61 @@ PAGE = r"""<!doctype html>
       .map((m) => ({ role: m.role === "assistant" ? "model" : "user", text: m.text }));
   }
 
+  function fmtSecs(v) {
+    const s = Math.max(0, Math.round(v));
+    return s < 60 ? s + " វិនាទី" : Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
+  }
+
+  /* Image generation runs as a server-side job: start it, then poll. One long
+     request through the tunnel would time out and leave the spinner hanging. */
+  async function runImageJob(text, aMsg, aNode, paint, controller) {
+    const fastEl = $("#imageFast");
+    const steps = fastEl && fastEl.checked ? 12 : 20;
+    setStatus(aNode, "កំពុងផ្ញើទៅ server រូបភាព…");
+    const start = await fetch(endpoint("/api/image/start"), {
+      method: "POST",
+      headers: requestHeaders(true),
+      body: JSON.stringify({ prompt: text, width: 1024, height: 1024, steps }),
+      signal: controller.signal,
+    });
+    if (!start.ok) {
+      let msg = await start.text();
+      try { msg = JSON.parse(msg).detail || msg; } catch (e) {}
+      throw new Error(String(msg).slice(0, 220) || "HTTP " + start.status);
+    }
+    const job = await start.json();
+    if (!job.job_id) throw new Error("server មិនផ្តល់ job id");
+
+    const t0 = Date.now();
+    for (;;) {
+      await new Promise((r) => setTimeout(r, 2500));
+      if (controller.signal.aborted) return;
+      let d;
+      try {
+        const r = await fetch(endpoint("/api/image/status/" + job.job_id), {
+          headers: requestHeaders(false),
+          signal: controller.signal,
+        });
+        d = await r.json();
+      } catch (e) {
+        if (e && e.name === "AbortError") return;
+        setStatus(aNode, "🎨 កំពុងរង់ចាំ server… " + fmtSecs((Date.now() - t0) / 1000));
+        continue;
+      }
+      const secs = (Date.now() - t0) / 1000;
+      if (d.status === "done" && d.data) {
+        aMsg.img = { url: "data:" + (d.mime || "image/png") + ";base64," + d.data };
+        setStatus(aNode, null);
+        paint();
+        return;
+      }
+      if (d.status === "error") throw new Error(d.error || "បង្កើតរូបមិនបាន");
+      const stage = d.status === "queued" ? "ចូលជួរ" : "កំពុងបង្កើត";
+      setStatus(aNode, "🎨 " + stage + "… " + fmtSecs(secs) + " · " + steps +
+        " ជំហាន (រូបដំបូងយូរ ព្រោះ load model)");
+    }
+  }
+
   async function send() {
     if (state.busy) return;
     const text = input.value.trim();
@@ -595,6 +655,10 @@ PAGE = r"""<!doctype html>
     };
 
     try {
+      if (imageMode.checked) {
+        await runImageJob(text, aMsg, aNode, paint, controller);
+        return;
+      }
       const res = await fetch(endpoint("/api/chat"), {
         method: "POST",
         headers: requestHeaders(true),

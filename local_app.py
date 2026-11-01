@@ -209,8 +209,10 @@ def _unauthorized() -> JSONResponse:
     )
 
 
-def _workflow(prompt: str, negative: str, width: int, height: int, seed: int) -> dict:
+def _workflow(prompt: str, negative: str, width: int, height: int, seed: int,
+              steps: int = 0) -> dict:
     """Minimal Qwen-Image text-to-image graph for ComfyUI's /prompt API."""
+    steps = steps or IMAGE_STEPS
     return {
         "1": {"class_type": "UNETLoader",
               "inputs": {"unet_name": IMAGE_MODEL, "weight_dtype": "default"}},
@@ -224,7 +226,7 @@ def _workflow(prompt: str, negative: str, width: int, height: int, seed: int) ->
               "inputs": {"width": width, "height": height, "batch_size": 1}},
         "7": {"class_type": "KSampler",
               "inputs": {"model": ["1", 0], "positive": ["4", 0], "negative": ["5", 0],
-                         "latent_image": ["6", 0], "seed": seed, "steps": IMAGE_STEPS,
+                         "latent_image": ["6", 0], "seed": seed, "steps": steps,
                          "cfg": 2.5, "sampler_name": "euler", "scheduler": "simple",
                          "denoise": 1.0}},
         "8": {"class_type": "VAEDecode", "inputs": {"samples": ["7", 0], "vae": ["3", 0]}},
@@ -277,14 +279,15 @@ def image_ready() -> bool:
         return False
 
 
-def generate_image(prompt: str, width: int = 1024, height: int = 1024):
+def generate_image(prompt: str, width: int = 1024, height: int = 1024,
+                   steps: int = 0):
     """(base64_png, error_message). Blocks until ComfyUI finishes."""
     seed = int(time.time()) % 2147483647
     negative = "blurry, low quality, watermark, text, deformed"
     try:
         r = requests.post(
             IMAGE_BASE_URL + "/prompt",
-            json={"prompt": _workflow(prompt, negative, width, height, seed)},
+            json={"prompt": _workflow(prompt, negative, width, height, seed, steps)},
             timeout=30,
         )
         if r.status_code != 200:
@@ -314,6 +317,98 @@ def generate_image(prompt: str, width: int = 1024, height: int = 1024):
     except Exception as exc:  # noqa: BLE001
         traceback.print_exc()
         return None, "មិនអាចភ្ជាប់ទៅ ComfyUI បានទេ៖ %s" % str(exc)[:120]
+
+
+# ─── Image jobs ─────────────────────────────────────────────────────────────
+# One image takes minutes on a T4 and the request crosses a tunnel plus a
+# reverse proxy; both drop long-lived connections, which showed up as a spinner
+# that never ended. So generation runs in a background thread and the browser
+# polls short status calls instead.
+_JOBS: dict = {}
+_JOBS_LOCK = threading.Lock()
+JOB_TTL = 1800.0
+JOB_MAX = 24
+
+
+def _job_set(jid: str, **kw) -> None:
+    with _JOBS_LOCK:
+        job = _JOBS.get(jid)
+        if job is not None:
+            job.update(kw)
+
+
+def _job_snapshot(jid: str):
+    with _JOBS_LOCK:
+        job = _JOBS.get(jid)
+        return dict(job) if job else None
+
+
+def _job_gc() -> None:
+    now = time.time()
+    with _JOBS_LOCK:
+        for jid in [j for j, v in _JOBS.items() if now - v["ts"] > JOB_TTL]:
+            _JOBS.pop(jid, None)
+        extra = len(_JOBS) - JOB_MAX
+        if extra > 0:
+            oldest = sorted(_JOBS.items(), key=lambda kv: kv[1]["ts"])[:extra]
+            for jid, _v in oldest:
+                _JOBS.pop(jid, None)
+
+
+def _job_run(jid: str, prompt: str, width: int, height: int, steps: int) -> None:
+    _job_set(jid, status="running", started=time.time())
+    data, err = generate_image(prompt, width, height, steps)
+    if data:
+        _job_set(jid, status="done", png=data, error=None, ts=time.time())
+    else:
+        _job_set(jid, status="error", error=err or "បង្កើតរូបមិនបាន", ts=time.time())
+
+
+class ImageReq(BaseModel):
+    prompt: str = ""
+    width: int = 1024
+    height: int = 1024
+    steps: int = 0
+
+
+def _image_start_local(req: "ImageReq"):
+    if not IMAGE_BASE_URL:
+        return JSONResponse(
+            {"detail": "មិនមាន ComfyUI ភ្ជាប់ — សូមរត់បន្ទាត់ Kaggle ក្នុង sidebar សិន។"},
+            status_code=503,
+        )
+    _job_gc()
+    width = max(256, min(2048, int(req.width or 1024)))
+    height = max(256, min(2048, int(req.height or 1024)))
+    steps = max(4, min(50, int(req.steps or IMAGE_STEPS)))
+    jid = os.urandom(8).hex()
+    with _JOBS_LOCK:
+        _JOBS[jid] = {"status": "queued", "ts": time.time(), "started": 0.0,
+                      "png": None, "error": None, "steps": steps,
+                      "size": [width, height]}
+    threading.Thread(
+        target=_job_run,
+        args=(jid, (req.prompt or "").strip() or "a beautiful scene",
+              width, height, steps),
+        daemon=True,
+    ).start()
+    return JSONResponse({"job_id": jid, "steps": steps, "size": [width, height]})
+
+
+def _proxy_json(method: str, path: str, body=None, timeout: float = 20.0):
+    """Forward one short JSON call to the registered GPU server, if any."""
+    upstream = remote_url()
+    if not upstream:
+        return None
+    try:
+        r = requests.request(method, upstream + path, json=body, timeout=timeout)
+    except Exception:  # noqa: BLE001
+        traceback.print_exc()
+        return None
+    try:
+        return JSONResponse(r.json(), status_code=r.status_code)
+    except Exception:  # noqa: BLE001
+        return JSONResponse({"detail": r.text[:200]}, status_code=502)
 
 
 class ImageIn(BaseModel):
@@ -366,11 +461,11 @@ def chat_stream(req: ChatRequest):
                     {
                         "type": "error",
                         "text": "បង្កើតរូបភាពត្រូវការ ComfyUI (ដំណើរការក្នុង Kaggle)។ "
-                                "សូមប្រើ script kaggle-start.sh រួចភ្ជាប់ URL។",
+                                "សូមរត់បន្ទាត់ Kaggle ដែលនៅក្នុង sidebar។",
                     }
                 )
             else:
-                yield sse({"type": "status", "text": "កំពុងបង្កើតរូបភាព… (2–8 នាទី លើ T4)"})
+                yield sse({"type": "status", "text": "កំពុងបង្កើតរូបភាព… (រូបដំបូងយូរ ព្រោះត្រូវ load model)"})
                 data, err = generate_image(req.message.strip() or "a beautiful scene")
                 if data:
                     yield sse({"type": "image", "mime": "image/png", "data": data})
@@ -516,6 +611,36 @@ def chat(req: ChatRequest, request: Request):
     )
 
 
+@app.post("/api/image/start")
+def image_start(req: ImageReq):
+    """Queue one image and return at once; the browser then polls the status."""
+    body = req.model_dump() if hasattr(req, "model_dump") else req.dict()
+    proxied = _proxy_json("POST", "/api/image/start", body)
+    if proxied is not None:
+        return proxied
+    return _image_start_local(req)
+
+
+@app.get("/api/image/status/{jid}")
+def image_status(jid: str):
+    proxied = _proxy_json("GET", "/api/image/status/" + jid)
+    if proxied is not None:
+        return proxied
+    snap = _job_snapshot(jid)
+    if not snap:
+        return JSONResponse({"detail": "រកមិនឃើញ job — សូមសាកម្តងទៀត។"}, status_code=404)
+    started = snap.get("started") or snap["ts"]
+    out = {"status": snap["status"],
+           "elapsed": round(max(0.0, time.time() - started), 1),
+           "steps": snap.get("steps")}
+    if snap["status"] == "done":
+        out["data"] = snap["png"]
+        out["mime"] = "image/png"
+    elif snap["status"] == "error":
+        out["error"] = snap["error"]
+    return out
+
+
 @app.get("/api/health")
 def health(request: Request):
     """Reports the active engine. Deliberately never exposes the key value."""
@@ -539,7 +664,7 @@ def health(request: Request):
         "key_set": bool(API_KEY),
         "access_key_required": bool(ACCESS_KEY),
         "web_search": "exa" if EXA_API_KEY else "off",
-        "image": "comfyui" if image_ready() else "off",
+        "image": "remote" if remote_alive() else ("comfyui" if image_ready() else "off"),
         "remote": {"url": remote_url(), "alive": remote_alive()},
     }
 

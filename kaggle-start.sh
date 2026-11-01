@@ -17,7 +17,8 @@
 #   int8_2_1 = Qwen-Image-2.1 int8 7.3GB + TE 6.3GB             (ស្រាល សម T4 16GB)
 #
 # ចំណាំ៖ T4 មាន VRAM 16GB < 22.7GB → script ប្រើ --lowvram ស្វ័យប្រវត្តិ
-# (offload ទៅ RAM)។ រាល់រូប ~2–8 នាទី — ធម្មតាសម្រាប់ fp8 លើ T4។
+# (offload ទៅ RAM)។ រូបដំបូងយូរ (load model ~32GB) រួចរូបបន្ទាប់លឿនជាង។
+# បើយឺតពេក ប្រើ int8_2_1 — តូចជាង ~៣ ដង ហើយសមនឹង VRAM 16GB។
 
 set -euo pipefail
 
@@ -160,6 +161,10 @@ LOWVRAM_FLAG=""
 if [ "$VRAM_GIB" -lt "$DM_GB" ]; then
   LOWVRAM_FLAG="--lowvram"
   warn "VRAM ${VRAM_GIB}GB < model ${DM_GB}GB → ប្រើ --lowvram (យឺត តែដំណើរការ)"
+  if [ "$MODEL_CHOICE" = "fp8_hq" ] && [ "$VRAM_GIB" -lt 24 ]; then
+    warn "fp8_hq យឺតខ្លាំងលើ T4។ ប្រសិនចង់លឿនជាង ~៣ ដង (សម VRAM 16GB)៖"
+    echo "   !BUFFY_IMAGE_MODEL=int8_2_1 bash /kaggle/working/buffy-image-start.sh"
+  fi
 fi
 
 nohup python3 main.py --listen 127.0.0.1 --port "$COMFY_PORT" \

@@ -10,7 +10,7 @@ PAGE = r"""<!doctype html>
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
-<title>Buffy AI</title>
+<title>Buffy AI — បង្កើតរូបភាព</title>
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+Khmer:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
@@ -227,34 +227,16 @@ PAGE = r"""<!doctype html>
       <div class="logo">✦</div>
       <div>
         <h1>Buffy AI</h1>
-        <small>ជំនួយការ AI ឆ្លាតវៃ</small>
+        <small>បង្កើតរូបភាពដោយ AI</small>
       </div>
     </div>
-    <button class="new-chat" id="newChat">＋ ការសន្ទនាថ្មី</button>
+    <button class="new-chat" id="newChat">＋ រូបភាពថ្មី</button>
 
-    <div class="side-label">ការកំណត់</div>
-    <div class="field">
-      <label for="model">ម៉ូដែល</label>
-      <select id="model">
-        <option value="local" selected>Qwen · local (ក្នុង Colab)</option>
-      </select>
-    </div>
-
-    <div class="side-label">Kaggle / Colab</div>
+    <div class="side-label">Server រូបភាព — Kaggle</div>
     <div class="conn" id="connStatus"><span class="dot"></span>រង់ចាំ server …</div>
     <div class="side-actions">
       <button class="ghost" id="copyCmd">📋 ចម្លងបន្ទាត់ Kaggle</button>
     </div>
-    <label class="toggle" for="webSearch">
-      <span>🌐 ស្វែងរកអ៊ីនធឺណិត</span>
-      <input type="checkbox" id="webSearch" checked />
-      <i class="switch"></i>
-    </label>
-    <label class="toggle" for="imageMode">
-      <span>🎨 បង្កើតរូបភាព</span>
-      <input type="checkbox" id="imageMode" />
-      <i class="switch"></i>
-    </label>
     <label class="toggle" for="imageFast">
       <span>⚡ លឿន (១២ ជំហាន)</span>
       <input type="checkbox" id="imageFast" checked />
@@ -267,7 +249,7 @@ PAGE = r"""<!doctype html>
     </div>
 
     <div class="side-foot">
-      ម៉ូដែល local · URL និង API key រក្សាទុកតែក្នុង browser នេះ · ប្រវត្តិក៏ដូចគ្នា
+      រូបភាព និងប្រវត្តិ រក្សាទុកក្នុង browser នេះប៉ុណ្ណោះ
     </div>
   </aside>
   <div class="scrim" id="scrim"></div>
@@ -275,21 +257,21 @@ PAGE = r"""<!doctype html>
   <main class="main">
     <div class="topbar">
       <button class="icon-btn" id="menuBtn" aria-label="menu">☰</button>
-      <div class="top-title" id="topTitle">ការសន្ទនាថ្មី</div>
-      <span class="pill" id="modePill">💬 ជជែក</span>
+      <div class="top-title" id="topTitle">រូបភាពថ្មី</div>
+      <span class="pill" id="modePill">🎨 បង្កើតរូបភាព</span>
     </div>
 
     <div class="chat" id="chat">
       <div class="thread" id="thread">
         <div class="empty" id="empty">
           <div class="big">✦</div>
-          <h2>តើខ្ញុំអាចជួយអ្វីបានខ្លះ?</h2>
-          <p>សួរបានគ្រប់សំណួរ · ផ្ញើរូបភាពឱ្យខ្ញុំមើល · ឬបើក “បង្កើតរូបភាព”</p>
+          <h2>ពិពណ៌នារូបភាពដែលអ្នកចង់បាន</h2>
+          <p>សរសេរអ្វីដែលអ្នកចង់ឃើញ រួចចុចផ្ញើ — AI នឹងគូររូបភាពឱ្យ</p>
           <div class="chips">
-            <button class="chip">ពន្យល់អំពី AI និងរបៀបដែលវាដំណើរការ</button>
-            <button class="chip">សរសេរកូដ Python សម្រាប់គណនាផ្ទៃក្រឡា</button>
-            <button class="chip">តើមានព័ត៌មានថ្មីៗអ្វីខ្លះថ្ងៃនេះ?</button>
-            <button class="chip">បង្កើតរូបភាពឆ្មាញ៉ាំកាហ្វេ ស្ទីលគំនូរទឹក</button>
+            <button class="chip">ឆ្មាញ៉ាំកាហ្វេ ស្ទីលគំនូរទឹក</button>
+            <button class="chip">ភ្នំស្វាយពេលថ្ងៃលិច ស្ទីលថតរូប</button>
+            <button class="chip">ទីក្រុងអនាគតពេលយប់ ពន្លឺស្វាយ</button>
+            <button class="chip">ផ្កាឈូកក្នុងស្រះ ស្ទីលគំនូរប្រេង</button>
           </div>
         </div>
       </div>
@@ -299,12 +281,11 @@ PAGE = r"""<!doctype html>
       <div class="composer">
         <div class="attachments" id="attachments"></div>
         <div class="box" id="box">
-          <button class="icon-btn" id="attachBtn" title="ភ្ជាប់រូបភាព">📎</button>
           <input type="file" id="fileInput" accept="image/*" multiple hidden />
-          <textarea id="input" rows="1" placeholder="សួរអ្វីក៏បាន… (Enter ដើម្បីផ្ញើ)"></textarea>
+          <textarea id="input" rows="1" placeholder="ពិពណ៌នារូបភាពដែលអ្នកចង់បាន… (Enter ដើម្បីផ្ញើ)"></textarea>
           <button class="send" id="sendBtn" title="ផ្ញើ">➤</button>
         </div>
-        <div class="hint">AI អាចធ្វើខុសបាន · សូមផ្ទៀងផ្ទាត់ព័ត៌មានសំខាន់ៗ</div>
+        <div class="hint">រូបភាពបង្កើតដោយ AI · រូបដំបូងយូរ ព្រោះត្រូវ load model</div>
       </div>
     </div>
   </main>
@@ -322,9 +303,12 @@ PAGE = r"""<!doctype html>
   const box = $("#box");
   const attEl = $("#attachments");
   const fileInput = $("#fileInput");
-  const modelSel = $("#model");
-  const webSearch = $("#webSearch");
-  const imageMode = $("#imageMode");
+  /* The page is image-only now: the model picker, web search and the image
+     toggle are gone from the sidebar, so keep inert stand-ins for the few
+     helpers that still read them. */
+  const modelSel = { value: "local" };
+  const webSearch = { checked: false };
+  const imageMode = { checked: true };
   const modePill = $("#modePill");
   const topTitle = $("#topTitle");
   const connStatusEl = $("#connStatus");
@@ -488,13 +472,13 @@ PAGE = r"""<!doctype html>
       const e = document.createElement("div");
       e.className = "empty";
       e.id = "empty";
-      e.innerHTML = '<div class="big">✦</div><h2>តើខ្ញុំអាចជួយអ្វីបានខ្លះ?</h2>' +
-        '<p>សួរបានគ្រប់សំណួរ · ផ្ញើរូបភាពឱ្យខ្ញុំមើល · ឬបើក “បង្កើតរូបភាព”</p>' +
+      e.innerHTML = '<div class="big">✦</div><h2>ពិពណ៌នារូបភាពដែលអ្នកចង់បាន</h2>' +
+        '<p>សរសេរអ្វីដែលអ្នកចង់ឃើញ រួចចុចផ្ញើ — AI នឹងគូររូបភាពឱ្យ</p>' +
         '<div class="chips">' +
-        '<button class="chip">ពន្យល់អំពី AI និងរបៀបដែលវាដំណើរការ</button>' +
-        '<button class="chip">សរសេរកូដ Python សម្រាប់គណនាផ្ទៃក្រឡា</button>' +
-        '<button class="chip">តើមានព័ត៌មានថ្មីៗអ្វីខ្លះថ្ងៃនេះ?</button>' +
-        '<button class="chip">បង្កើតរូបភាពឆ្មាញ៉ាំកាហ្វេ ស្ទីលគំនូរទឹក</button>' +
+        '<button class="chip">ឆ្មាញ៉ាំកាហ្វេ ស្ទីលគំនូរទឹក</button>' +
+        '<button class="chip">ភ្នំស្វាយពេលថ្ងៃលិច ស្ទីលថតរូប</button>' +
+        '<button class="chip">ទីក្រុងអនាគតពេលយប់ ពន្លឺស្វាយ</button>' +
+        '<button class="chip">ផ្កាឈូកក្នុងស្រះ ស្ទីលគំនូរប្រេវ</button>' +
         "</div>";
       thread.appendChild(e);
       bindChips(e);
@@ -740,7 +724,7 @@ PAGE = r"""<!doctype html>
   }
   function updateTitle() {
     const first = state.messages.find((m) => m.role === "user");
-    topTitle.textContent = first ? first.text.slice(0, 60) : "ការសន្ទនាថ្មី";
+    topTitle.textContent = first ? first.text.slice(0, 60) : "រូបភាពថ្មី";
   }
 
   input.addEventListener("input", autoGrow);
@@ -754,7 +738,8 @@ PAGE = r"""<!doctype html>
     }
     send();
   };
-  $("#attachBtn").onclick = () => fileInput.click();
+  const attachBtnEl = $("#attachBtn");
+  if (attachBtnEl) attachBtnEl.onclick = () => fileInput.click();
   webSearch.onchange = () => { updateMode(); save(); };
   imageMode.onchange = () => { updateMode(); save(); };
   modelSel.onchange = () => save();

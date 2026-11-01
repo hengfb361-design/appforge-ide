@@ -12,13 +12,14 @@
 #   ៤. បើក ComfyUI (ផ្ទៃក្នុង) + server Buffy (local_app.py) + tunnel តែមួយ
 #   ៥. បង្ហាញ URL សម្រាប់ website — គ្មាន API key ត្រូវការ
 #
-# ជម្រើស model (env BUFFY_IMAGE_MODEL)៖
-#   fp8_hq   = qwen_image_fp8_hq.safetensors 22.7GB + TE 9.4GB  [default]
-#   int8_2_1 = Qwen-Image-2.1 int8 7.3GB + TE 6.3GB             (ស្រាល សម T4 16GB)
+# ជម្រើស model (env BUFFY_IMAGE_MODEL = auto | fp8_hq | int8_2_1)៖
+#   auto     = ជ្រើសតាម VRAM (លំនាំដើម) — VRAM < 24GB → int8_2_1
+#   fp8_hq   = Qwen-Image fp8_hq · 22.7 + 9.4 + 0.3GB = 32.4GB (ត្រូវការ VRAM ≥ 24GB)
+#   int8_2_1 = Qwen-Image-2.1 · 7.3 + 6.3 + 0.7GB = 14.3GB (សម T4 15GB)
 #
-# ចំណាំ៖ T4 មាន VRAM 16GB < 22.7GB → script ប្រើ --lowvram ស្វ័យប្រវត្តិ
-# (offload ទៅ RAM)។ រូបដំបូងយូរ (load model ~32GB) រួចរូបបន្ទាប់លឿនជាង។
-# បើយឺតពេក ប្រើ int8_2_1 — តូចជាង ~៣ ដង ហើយសមនឹង VRAM 16GB។
+# ហេតុអ្វី auto ជ្រើស int8 លើ T4៖ weights 32.4GB ធំជាងទាំង VRAM ១៥GB និង RAM ៣០GB
+# → ComfyUI ត្រូវអាន weight ពី disk រាល់ជំហាន (~៣០ វិនាទី/ជំហាន)។ លើសពីនេះ T4 គ្មាន FP8
+# tensor core ដូច្នេះ fp8 មិនផ្តល់ល្បឿនអ្វីទេ។ int8_2_1 សមក្នុង RAM/VRAM → ឈប់អានពី disk។
 
 set -euo pipefail
 
@@ -52,9 +53,18 @@ if [ "$VRAM_GIB" -eq 0 ]; then
 fi
 ok "GPU មាន VRAM ${VRAM_GIB}GB"
 
+MEM_GIB=$(awk '/MemTotal/{printf "%d", $2/1024/1024}' /proc/meminfo 2>/dev/null || true)
+MEM_GIB=${MEM_GIB:-0}
+ok "RAM មាន ${MEM_GIB}GB"
+
 # ─── ២/៥  ជ្រើស model + ពិនិត្យ disk ─────────────────────────────────────────
 say "២/៥  ជ្រើស model និងពិនិត្យទំហំ disk"
-MODEL_CHOICE="${BUFFY_IMAGE_MODEL:-fp8_hq}"
+MODEL_CHOICE="${BUFFY_IMAGE_MODEL:-auto}"
+
+if [ "$MODEL_CHOICE" = "auto" ]; then
+  if [ "$VRAM_GIB" -ge 24 ]; then MODEL_CHOICE="fp8_hq"; else MODEL_CHOICE="int8_2_1"; fi
+  ok "ជ្រើស model ស្វ័យប្រវត្តិ: $MODEL_CHOICE (VRAM ${VRAM_GIB}GB · RAM ${MEM_GIB}GB)"
+fi
 
 case "$MODEL_CHOICE" in
   fp8_hq)
@@ -73,8 +83,14 @@ case "$MODEL_CHOICE" in
     TE_NAME="qwen3vl_8b_w4a8.safetensors"
     VA_NAME="qwen_image_2.1_vae_bf16.safetensors"
     LABEL="Qwen-Image-2.1 int8 (ស្រាល — សម T4)" ;;
-  *) die "BUFFY_IMAGE_MODEL មិនស្គាល់: $MODEL_CHOICE (ប្រើ fp8_hq ឬ int8_2_1)" ;;
+  *) die "BUFFY_IMAGE_MODEL មិនស្គាល់: $MODEL_CHOICE (ប្រើ auto, fp8_hq ឬ int8_2_1)" ;;
 esac
+
+WEIGHTS_GB=$(( DM_GB + TE_GB + VA_GB ))
+if [ "$MEM_GIB" -gt 0 ] && [ "$WEIGHTS_GB" -gt "$MEM_GIB" ]; then
+  warn "weights ${WEIGHTS_GB}GB > RAM ${MEM_GIB}GB → ត្រូវអានពី disk រាល់ជំហាន (យឺត ~៣០ វិនាទី/ជំហាន)"
+  echo "   ដំណោះស្រាយ៖ !BUFFY_IMAGE_MODEL=int8_2_1 bash /kaggle/working/buffy-image-start.sh"
+fi
 
 NEED_GB=$(( DM_GB + TE_GB + VA_GB + 6 ))
 mkdir -p "$MODELS_DIR" "$WORK" || die "បង្កើត $MODELS_DIR មិនបាន"
@@ -162,8 +178,8 @@ if [ "$VRAM_GIB" -lt "$DM_GB" ]; then
   LOWVRAM_FLAG="--lowvram"
   warn "VRAM ${VRAM_GIB}GB < model ${DM_GB}GB → ប្រើ --lowvram (យឺត តែដំណើរការ)"
   if [ "$MODEL_CHOICE" = "fp8_hq" ] && [ "$VRAM_GIB" -lt 24 ]; then
-    warn "fp8_hq យឺតខ្លាំងលើ T4។ ប្រសិនចង់លឿនជាង ~៣ ដង (សម VRAM 16GB)៖"
-    echo "   !BUFFY_IMAGE_MODEL=int8_2_1 bash /kaggle/working/buffy-image-start.sh"
+    warn "fp8_hq យឺតខ្លាំងលើ T4 (~៣០ វិនាទី/ជំហាន)។ ប្រើ auto ដើម្បីលឿនជាង ~៣ ដង៖"
+    echo "   !bash /kaggle/working/buffy-image-start.sh        # auto → int8_2_1"
   fi
 fi
 

@@ -24,7 +24,13 @@
 set -euo pipefail
 
 RAW_BASE="${BUFFY_RAW_BASE:-https://raw.githubusercontent.com/hengfb361-design/buffy-ai/main}"
-WORK="${BUFFY_HOME:-/kaggle/working/buffy-image}"
+# /kaggle/working quota ~១៩GB ពេញលឿន (ComfyUI + pip) → ងាយបណ្តាលអោយ curl error 23.
+# /kaggle/temp ទីទំនេរធំជាង → ដាក់ការងារទាំងអស់នៅទីនោះ
+if [ -z "${BUFFY_HOME:-}" ] && [ -d /kaggle/temp ]; then
+  WORK="/kaggle/temp/buffy-image"
+else
+  WORK="${BUFFY_HOME:-/kaggle/working/buffy-image}"
+fi
 COMFY_PORT="${COMFY_PORT:-8188}"
 PORT="${PORT:-8000}"
 

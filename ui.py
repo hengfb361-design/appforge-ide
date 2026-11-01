@@ -63,6 +63,9 @@ PAGE = r"""<!doctype html>
   .conn{font-size:11px;color:var(--muted);padding:0 6px;line-height:1.45;min-height:15px;word-break:break-word}
   .conn.ok{color:#3ddc97}
   .conn.bad{color:#ff8f8f}
+  .conn .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;background:#6b7280;vertical-align:middle}
+  .conn.ok .dot{background:#3b82f6;box-shadow:0 0 0 3px rgba(59,130,246,.22);animation:dotpulse 2s infinite}
+  @keyframes dotpulse{50%{box-shadow:0 0 0 6px rgba(59,130,246,0)}}
   .toggle{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 10px;border-radius:10px;background:var(--panel-2);border:1px solid var(--border);cursor:pointer}
   .toggle span{font-size:13px;display:flex;align-items:center;gap:8px}
   .toggle input{display:none}
@@ -244,14 +247,14 @@ PAGE = r"""<!doctype html>
              placeholder="https://xxxx.trycloudflare.com" />
     </div>
     <div class="field">
-      <label for="colabKey">API key ពី Colab</label>
+      <label for="colabKey">API key (ស្រេចចិត្ត)</label>
       <input type="password" id="colabKey" autocomplete="off" spellcheck="false"
-             placeholder="paste key ដែល Colab បង្ហាញ" />
+             placeholder="ទុកទទេ បើ server មិនទាមទារ key" />
     </div>
     <div class="side-actions">
       <button class="ghost" id="connectBtn">🔌 ភ្ជាប់ និងសាកល្បង</button>
     </div>
-    <div class="conn" id="connStatus">មិនទាន់ភ្ជាប់ — ប្រើ server របស់គេហទំព័រនេះ</div>
+    <div class="conn" id="connStatus"><span class="dot"></span>មិនទាន់ភ្ជាប់ — ប្រើ server របស់គេហទំព័រនេះ</div>
     <label class="toggle" for="webSearch">
       <span>🌐 ស្វែងរកអ៊ីនធឺណិត</span>
       <input type="checkbox" id="webSearch" checked />
@@ -387,8 +390,8 @@ PAGE = r"""<!doctype html>
     return h;
   }
   function setConn(text, kind) {
-    connStatusEl.textContent = text;
     connStatusEl.className = "conn" + (kind ? " " + kind : "");
+    connStatusEl.innerHTML = '<span class="dot"></span>' + esc(text || "");
   }
   function saveConn() {
     try {

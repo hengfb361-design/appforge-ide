@@ -27,9 +27,11 @@ local engine at LLAMA_URL. The key is only ever read from the environment on
 the server, so the public page never receives it.
 """
 
+import base64
 import hmac
 import json
 import os
+import time
 import traceback
 from urllib.parse import quote_plus, urlparse
 
@@ -56,6 +58,16 @@ API_MODEL = os.environ.get("API_MODEL", "").strip()
 # "Authorization: Bearer <key>". Same-origin calls — the page this app serves —
 # are already protected by the tunnel URL itself and keep working.
 ACCESS_KEY = os.environ.get("ACCESS_KEY", "").strip()
+
+# Optional image generation: ComfyUI runs beside this app (Kaggle / Colab) and
+# serves Qwen-Image. The browser only ever talks to this server, so ComfyUI
+# never needs CORS or a public port of its own.
+IMAGE_BASE_URL = os.environ.get("IMAGE_BASE_URL", "").rstrip("/")
+IMAGE_MODEL = os.environ.get("IMAGE_MODEL", "qwen_image_fp8_hq.safetensors")
+IMAGE_CLIP = os.environ.get("IMAGE_CLIP", "qwen_2.5_vl_7b_fp8_scaled.safetensors")
+IMAGE_VAE = os.environ.get("IMAGE_VAE", "qwen_image_vae.safetensors")
+IMAGE_STEPS = int(os.environ.get("IMAGE_STEPS", "20"))
+IMAGE_TIMEOUT = int(os.environ.get("IMAGE_TIMEOUT", "900"))
 
 # Optional web search for source citations (Exa). Read from the server
 # environment only — the browser never receives it.
@@ -196,6 +208,79 @@ def _unauthorized() -> JSONResponse:
     )
 
 
+def _workflow(prompt: str, negative: str, width: int, height: int, seed: int) -> dict:
+    """Minimal Qwen-Image text-to-image graph for ComfyUI's /prompt API."""
+    return {
+        "1": {"class_type": "UNETLoader",
+              "inputs": {"unet_name": IMAGE_MODEL, "weight_dtype": "default"}},
+        "2": {"class_type": "CLIPLoader",
+              "inputs": {"clip_name": IMAGE_CLIP, "type": "qwen_image"}},
+        "3": {"class_type": "VAELoader", "inputs": {"vae_name": IMAGE_VAE}},
+        "4": {"class_type": "CLIPTextEncode", "inputs": {"text": prompt, "clip": ["2", 0]}},
+        "5": {"class_type": "CLIPTextEncode",
+              "inputs": {"text": negative, "clip": ["2", 0]}},
+        "6": {"class_type": "EmptySD3LatentImage",
+              "inputs": {"width": width, "height": height, "batch_size": 1}},
+        "7": {"class_type": "KSampler",
+              "inputs": {"model": ["1", 0], "positive": ["4", 0], "negative": ["5", 0],
+                         "latent_image": ["6", 0], "seed": seed, "steps": IMAGE_STEPS,
+                         "cfg": 2.5, "sampler_name": "euler", "scheduler": "simple",
+                         "denoise": 1.0}},
+        "8": {"class_type": "VAEDecode", "inputs": {"samples": ["7", 0], "vae": ["3", 0]}},
+        "9": {"class_type": "SaveImage",
+              "inputs": {"images": ["8", 0], "filename_prefix": "buffy"}},
+    }
+
+
+def image_ready() -> bool:
+    """True when a ComfyUI instance is reachable next to this server."""
+    if not IMAGE_BASE_URL:
+        return False
+    try:
+        return requests.get(IMAGE_BASE_URL + "/system_stats", timeout=3).ok
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def generate_image(prompt: str, width: int = 1024, height: int = 1024):
+    """(base64_png, error_message). Blocks until ComfyUI finishes."""
+    seed = int(time.time()) % 2147483647
+    negative = "blurry, low quality, watermark, text, deformed"
+    try:
+        r = requests.post(
+            IMAGE_BASE_URL + "/prompt",
+            json={"prompt": _workflow(prompt, negative, width, height, seed)},
+            timeout=30,
+        )
+        if r.status_code != 200:
+            return None, "ComfyUI បដិសេធ (HTTP %s)៖ %s" % (r.status_code, r.text[:180])
+        pid = (r.json() or {}).get("prompt_id")
+        if not pid:
+            return None, "ComfyUI មិនផ្តល់ prompt_id — សូមពិនិត្យ workflow"
+        deadline = time.time() + IMAGE_TIMEOUT
+        while time.time() < deadline:
+            time.sleep(2)
+            hist = requests.get(IMAGE_BASE_URL + "/history/" + pid, timeout=10).json() or {}
+            entry = hist.get(pid) or {}
+            for node in (entry.get("outputs") or {}).values():
+                for img in (node.get("images") or []):
+                    v = requests.get(
+                        IMAGE_BASE_URL + "/view",
+                        params={"filename": img.get("filename", ""),
+                                "subfolder": img.get("subfolder", ""),
+                                "type": img.get("type", "output")},
+                        timeout=60,
+                    )
+                    if v.status_code == 200 and v.content:
+                        return base64.b64encode(v.content).decode(), None
+            if (entry.get("status") or {}).get("status_str") == "error":
+                return None, "ការបង្កើតរូបបរាជ័យ — សូមមើល log ComfyUI ក្នុង Kaggle"
+        return None, "អស់ពេលរង់ចាំ — model ២២GB យឺតលើ T4។ សាកម្តងទៀត ឬប្រើ model ស្រាល"
+    except Exception as exc:  # noqa: BLE001
+        traceback.print_exc()
+        return None, "មិនអាចភ្ជាប់ទៅ ComfyUI បានទេ៖ %s" % str(exc)[:120]
+
+
 class ImageIn(BaseModel):
     data: str = ""
     mime_type: str = "image/png"
@@ -241,12 +326,24 @@ def chat_stream(req: ChatRequest):
                 }
             )
         if req.image_mode:
-            yield sse(
-                {
-                    "type": "error",
-                    "text": "ម៉ូដែល local នេះមិនអាចបង្កើតរូបភាពបានទេ។",
-                }
-            )
+            if not IMAGE_BASE_URL:
+                yield sse(
+                    {
+                        "type": "error",
+                        "text": "បង្កើតរូបភាពត្រូវការ ComfyUI (ដំណើរការក្នុង Kaggle)។ "
+                                "សូមប្រើ script kaggle-start.sh រួចភ្ជាប់ URL។",
+                    }
+                )
+            else:
+                yield sse({"type": "status", "text": "កំពុងបង្កើតរូបភាព… (2–8 នាទី លើ T4)"})
+                data, err = generate_image(req.message.strip() or "a beautiful scene")
+                if data:
+                    yield sse({"type": "image", "mime": "image/png", "data": data})
+                    yield sse({"type": "status", "text": "✅ រូបភាពរួចរាល់"})
+                else:
+                    yield sse({"type": "error", "text": err or "បង្កើតរូបមិនបាន"})
+            yield sse({"type": "done"})
+            return
 
         base_url, model_name, headers = backend()
         yield sse({"type": "status", "text": "កំពុងគិត (%s)…" % mode()})
@@ -368,6 +465,7 @@ def health(request: Request):
         "key_set": bool(API_KEY),
         "access_key_required": bool(ACCESS_KEY),
         "web_search": "exa" if EXA_API_KEY else "off",
+        "image": "comfyui" if image_ready() else "off",
     }
 
 

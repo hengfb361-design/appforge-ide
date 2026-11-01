@@ -9,21 +9,22 @@
 #   ១. ពិនិត្យ GPU / VRAM / disk
 #   ២. ដំឡើង ComfyUI (engine សម្រាប់ Qwen-Image)
 #   ៣. ទាញយក qwen_image_fp8_hq.safetensors + text encoder + VAE ទៅ /kaggle/temp
-#   ៤. បើក ComfyUI + tunnel សាធារណៈ
-#   ៥. បង្ហាញ URL → បើកក្នុង browser រួចបង្កើតរូបភាព
+#   ៤. បើក ComfyUI (ផ្ទៃក្នុង) + server Buffy (local_app.py) + tunnel តែមួយ
+#   ៥. បង្ហាញ URL សម្រាប់ website — គ្មាន API key ត្រូវការ
 #
 # ជម្រើស model (env BUFFY_IMAGE_MODEL)៖
-#   fp8_hq   = qwen_image_fp8_hq.safetensors 22.7GB + TE 9.4GB  (គុណភាពខ្ពស់បំផុត) [default]
+#   fp8_hq   = qwen_image_fp8_hq.safetensors 22.7GB + TE 9.4GB  [default]
 #   int8_2_1 = Qwen-Image-2.1 int8 7.3GB + TE 6.3GB             (ស្រាល សម T4 16GB)
 #
-# ចំណាំ៖ T4 មាន VRAM 16GB < 22.7GB → script ប្រើ --lowvram ដោយស្វ័យប្រវត្តិ
-# (offload ទៅ RAM)។ ការបង្កើតរូបនឹងយឺត (រាល់រូប ~2-8 នាទី) — ធម្មតាសម្រាប់ fp8 លើ T4។
+# ចំណាំ៖ T4 មាន VRAM 16GB < 22.7GB → script ប្រើ --lowvram ស្វ័យប្រវត្តិ
+# (offload ទៅ RAM)។ រាល់រូប ~2–8 នាទី — ធម្មតាសម្រាប់ fp8 លើ T4។
 
 set -euo pipefail
 
 RAW_BASE="${BUFFY_RAW_BASE:-https://raw.githubusercontent.com/hengfb361-design/buffy-ai/main}"
 WORK="${BUFFY_HOME:-/kaggle/working/buffy-image}"
-PORT="${PORT:-8188}"
+COMFY_PORT="${COMFY_PORT:-8188}"
+PORT="${PORT:-8000}"
 
 # model ធំៗ ត្រូវដាក់ /kaggle/temp (quota ខ្ពស់ជាង /kaggle/working ~20GB)
 MODELS_DIR="${BUFFY_MODELS_DIR:-/kaggle/temp/buffy-image-models}"
@@ -54,22 +55,27 @@ ok "GPU មាន VRAM ${VRAM_GIB}GB"
 say "២/៥  ជ្រើស model និងពិនិត្យទំហំ disk"
 MODEL_CHOICE="${BUFFY_IMAGE_MODEL:-fp8_hq}"
 
-# repo | file | size GB — តម្លៃពិតពី Hugging Face
 case "$MODEL_CHOICE" in
   fp8_hq)
-    DM_REPO="Comfy-Org/Qwen-Image";  DM_FILE="split_files/diffusion_models/qwen_image_fp8_hq.safetensors";   DM_GB=23
+    DM_REPO="Comfy-Org/Qwen-Image";  DM_FILE="split_files/diffusion_models/qwen_image_fp8_hq.safetensors";     DM_GB=23
     TE_REPO="Comfy-Org/Qwen-Image";  TE_FILE="split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors"; TE_GB=10
-    VA_REPO="Comfy-Org/Qwen-Image";  VA_FILE="split_files/vae/qwen_image_vae.safetensors";                    VA_GB=1
+    VA_REPO="Comfy-Org/Qwen-Image";  VA_FILE="split_files/vae/qwen_image_vae.safetensors";                      VA_GB=1
+    DM_NAME="qwen_image_fp8_hq.safetensors"
+    TE_NAME="qwen_2.5_vl_7b_fp8_scaled.safetensors"
+    VA_NAME="qwen_image_vae.safetensors"
     LABEL="Qwen-Image fp8_hq (គុណភាពខ្ពស់បំផុត)" ;;
   int8_2_1)
-    DM_REPO="Comfy-Org/Qwen-Image-2.1"; DM_FILE="diffusion_models/qwen_image_2.1_int8_convrot.safetensors";        DM_GB=8
-    TE_REPO="Comfy-Org/Qwen-Image-2.1"; TE_FILE="text_encoders/qwen3vl_8b_w4a8.safetensors";                       TE_GB=7
-    VA_REPO="Comfy-Org/Qwen-Image-2.1"; VA_FILE="vae/qwen_image_2.1_vae_bf16.safetensors";                          VA_GB=1
+    DM_REPO="Comfy-Org/Qwen-Image-2.1"; DM_FILE="diffusion_models/qwen_image_2.1_int8_convrot.safetensors"; DM_GB=8
+    TE_REPO="Comfy-Org/Qwen-Image-2.1"; TE_FILE="text_encoders/qwen3vl_8b_w4a8.safetensors";                TE_GB=7
+    VA_REPO="Comfy-Org/Qwen-Image-2.1"; VA_FILE="vae/qwen_image_2.1_vae_bf16.safetensors";                   VA_GB=1
+    DM_NAME="qwen_image_2.1_int8_convrot.safetensors"
+    TE_NAME="qwen3vl_8b_w4a8.safetensors"
+    VA_NAME="qwen_image_2.1_vae_bf16.safetensors"
     LABEL="Qwen-Image-2.1 int8 (ស្រាល — សម T4)" ;;
   *) die "BUFFY_IMAGE_MODEL មិនស្គាល់: $MODEL_CHOICE (ប្រើ fp8_hq ឬ int8_2_1)" ;;
 esac
 
-NEED_GB=$(( DM_GB + TE_GB + VA_GB + 6 ))   # +6GB សម្រាប់ ComfyUI/venv/cache
+NEED_GB=$(( DM_GB + TE_GB + VA_GB + 6 ))
 mkdir -p "$MODELS_DIR" "$WORK" || die "បង្កើត $MODELS_DIR មិនបាន"
 
 FREE_GB=$(df -BG --output=avail "$MODELS_DIR" 2>/dev/null | tail -1 | tr -dc '0-9')
@@ -81,7 +87,7 @@ if [ "$FREE_GB" -lt "$NEED_GB" ]; then
   warn "disk មិនគ្រប់!"
   echo "   ដំណោះស្រាយ ១ — ប្រើ model ស្រាលជាង (សម T4 16GB ផងដែរ)៖"
   echo "   !BUFFY_IMAGE_MODEL=int8_2_1 bash /kaggle/working/buffy-image-start.sh"
-  echo "   ដំណោះស្រាយ ២ — បង្កើន disk៖ Kaggle → Settings → 'Clear working directory' រួច run ម្តងទៀត"
+  echo "   ដំណោះស្រាយ ២ — Kaggle → Settings → 'Clear working directory' រួច run ម្តងទៀត"
   die "គ្មានទំហំគ្រប់សម្រាប់ $LABEL"
 fi
 ok "disk គ្រប់"
@@ -138,8 +144,17 @@ buffy:
   vae: vae
 EOF
 
-# ─── ៥/៥  បើក ComfyUI + tunnel ─────────────────────────────────────────────
-say "៥/៥  បើក ComfyUI និង tunnel សាធារណៈ"
+# ─── ៥/៥  បើក ComfyUI + Buffy server + tunnel ────────────────────────────────
+say "៥/៥  បើក ComfyUI, server Buffy និង tunnel"
+
+cleanup() {
+  trap - INT TERM EXIT
+  pkill -f "cloudflared tunnel" 2>/dev/null || true
+  pkill -f "uvicorn local_app:app" 2>/dev/null || true
+  pkill -f "ComfyUI/main.py" 2>/dev/null || true
+  printf '\n\033[1;33m🔌 បានបិទ ComfyUI, server និង tunnel។\033[0m\n'
+}
+trap cleanup INT TERM EXIT
 
 LOWVRAM_FLAG=""
 if [ "$VRAM_GIB" -lt "$DM_GB" ]; then
@@ -147,25 +162,38 @@ if [ "$VRAM_GIB" -lt "$DM_GB" ]; then
   warn "VRAM ${VRAM_GIB}GB < model ${DM_GB}GB → ប្រើ --lowvram (យឺត តែដំណើរការ)"
 fi
 
-cleanup() {
-  trap - INT TERM EXIT
-  pkill -f "cloudflared tunnel" 2>/dev/null || true
-  pkill -f "ComfyUI/main.py" 2>/dev/null || true
-  printf '\n\033[1;33m🔌 បានបិទ ComfyUI និង tunnel។\033[0m\n'
-}
-trap cleanup INT TERM EXIT
-
-nohup python3 main.py --listen 127.0.0.1 --port "$PORT" \
+nohup python3 main.py --listen 127.0.0.1 --port "$COMFY_PORT" \
   --extra-model-paths-config "$WORK/extra_model_paths.yaml" \
   $LOWVRAM_FLAG >"$WORK/comfy.log" 2>&1 </dev/null &
 
 ready=""
-for _ in $(seq 1 120); do
-  if curl -sf "http://127.0.0.1:$PORT/system_stats" >/dev/null 2>&1; then ready=1; break; fi
-  sleep 1
+for _ in $(seq 1 180); do
+  if curl -sf "http://127.0.0.1:$COMFY_PORT/system_stats" >/dev/null 2>&1; then ready=1; break; fi
+  sleep 2
 done
 [ -n "$ready" ] || die "ComfyUI មិនឡើង — សូមមើល $WORK/comfy.log"
-ok "ComfyUI ដំណើរការ"
+ok "ComfyUI ដំណើរការ (port $COMFY_PORT)"
+
+# Buffy server = អ្វីដែល website ភ្ជាប់ទៅ (បង្កើតរូប + UI)
+cd "$WORK"
+for f in local_app.py ui.py; do
+  curl -fsSL -o "$WORK/$f" "$RAW_BASE/$f" || die "ទាញយក $f មិនបាន"
+done
+python3 -m pip install -q fastapi uvicorn requests 2>&1 | tail -2 || die "pip install fastapi មិនបាន"
+
+# គ្មាន ACCESS_KEY → website មិនត្រូវការ key អ្វីទាំងអស់
+IMAGE_BASE_URL="http://127.0.0.1:$COMFY_PORT" \
+  IMAGE_MODEL="$DM_NAME" IMAGE_CLIP="$TE_NAME" IMAGE_VAE="$VA_NAME" \
+  nohup python3 -m uvicorn local_app:app --host 127.0.0.1 --port "$PORT" \
+  --log-level warning >"$WORK/ui.log" 2>&1 </dev/null &
+
+ready=""
+for _ in $(seq 1 90); do
+  if curl -sf "http://127.0.0.1:$PORT/api/health" >/dev/null 2>&1; then ready=1; break; fi
+  sleep 1
+done
+[ -n "$ready" ] || die "server Buffy មិនឡើង — សូមមើល $WORK/ui.log"
+ok "server Buffy ដំណើរការ"
 
 if ! command -v cloudflared >/dev/null 2>&1; then
   curl -fsSL -o /usr/local/bin/cloudflared \
@@ -189,8 +217,9 @@ printf '\033[1;32m🎨 បង្កើតរូបភាពរួចរាល់
 printf '   Model : \033[1m%s\033[0m\n' "$LABEL"
 printf '   URL   : \033[1m%s\033[0m\n' "$PUBLIC_URL"
 printf '\033[1;32m%s\033[0m\n' "════════════════════════════════════════════════════════════════"
-printf '   បើក URL ក្នុង browser → ជ្រើស template "Qwen-Image" → សរសេរ prompt → Run\n'
-printf '   រូបដំបូងយឺត (load model ចូល GPU): ~2-8 នាទី លើ T4\n\n'
+printf '   ១) website → sidebar → Colab → paste URL ខាងលើ (គ្មាន key)\n'
+printf '   ២) ចុច «🔌 ភ្ជាប់ និងសាកល្បង» → ចំណុច \033[1;34mខៀវ\033[0m = ភ្ជាប់រួច\n'
+printf '   ៣) បើក «🎨 បង្កើតរូបភាព» → សរសេរ prompt → ផ្ញើ\n\n'
 printf '\033[1;33m⚠️  កុំបិទ cell នេះ — កម្មវិធីរត់ពេល cell នៅរត់។\033[0m\n'
 
 while :; do sleep 30; done

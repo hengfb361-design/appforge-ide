@@ -62,7 +62,7 @@ say "២/៥  ជ្រើស model និងពិនិត្យទំហំ d
 MODEL_CHOICE="${BUFFY_IMAGE_MODEL:-auto}"
 
 if [ "$MODEL_CHOICE" = "auto" ]; then
-  if [ "$VRAM_GIB" -ge 24 ]; then MODEL_CHOICE="fp8_hq"; else MODEL_CHOICE="int8_2_1"; fi
+  if [ "$VRAM_GIB" -ge 24 ]; then MODEL_CHOICE="fp8_hq"; else MODEL_CHOICE="turbo_2_1"; fi
   ok "ជ្រើស model ស្វ័យប្រវត្តិ: $MODEL_CHOICE (VRAM ${VRAM_GIB}GB · RAM ${MEM_GIB}GB)"
 fi
 
@@ -83,7 +83,25 @@ case "$MODEL_CHOICE" in
     TE_NAME="qwen3vl_8b_int8_convrot.safetensors"
     VA_NAME="qwen_image_2.1_vae_bf16.safetensors"
     LABEL="Qwen-Image-2.1 int8 (ស្រាល · 17GB — សម T4)" ;;
-  *) die "BUFFY_IMAGE_MODEL មិនស្គាល់: $MODEL_CHOICE (ប្រើ auto, fp8_hq ឬ int8_2_1)" ;;
+  turbo_2_1)
+    # Turbo = distilled for 8 steps; រូបចេញលឿនជាង int8_2_1 ~៣ ដង (គុណភាពធម្មតា)
+    DM_REPO="Comfy-Org/Qwen-Image-2.1"; DM_FILE="diffusion_models/qwen_image_2.1_turbo_int8_convrot.safetensors"; DM_GB=8
+    TE_REPO="Comfy-Org/Qwen-Image-2.1"; TE_FILE="text_encoders/qwen3vl_8b_int8_convrot.safetensors";       TE_GB=10
+    VA_REPO="Comfy-Org/Qwen-Image-2.1"; VA_FILE="vae/qwen_image_2.1_vae_bf16.safetensors";                   VA_GB=1
+    DM_NAME="qwen_image_2.1_turbo_int8_convrot.safetensors"
+    TE_NAME="qwen3vl_8b_int8_convrot.safetensors"
+    VA_NAME="qwen_image_2.1_vae_bf16.safetensors"
+    LABEL="Qwen-Image-2.1 Turbo int8 (៨ ជំហាន · 17GB — លឿនសម T4)" ;;
+  turbo_lite_2_1)
+    # ដូច turbo_2_1 តែ text encoder w4a8 → ~14GB ចូល VRAM 15GB ស្ទើរទាំងអស់
+    DM_REPO="Comfy-Org/Qwen-Image-2.1"; DM_FILE="diffusion_models/qwen_image_2.1_turbo_int8_convrot.safetensors"; DM_GB=8
+    TE_REPO="Comfy-Org/Qwen-Image-2.1"; TE_FILE="text_encoders/qwen3vl_8b_w4a8.safetensors";                TE_GB=7
+    VA_REPO="Comfy-Org/Qwen-Image-2.1"; VA_FILE="vae/qwen_image_2.1_vae_bf16.safetensors";                   VA_GB=1
+    DM_NAME="qwen_image_2.1_turbo_int8_convrot.safetensors"
+    TE_NAME="qwen3vl_8b_w4a8.safetensors"
+    VA_NAME="qwen_image_2.1_vae_bf16.safetensors"
+    LABEL="Qwen-Image-2.1 Turbo lite (~14GB — ស្រាលបំផុតសម T4)" ;;
+  *) die "BUFFY_IMAGE_MODEL មិនស្គាល់: $MODEL_CHOICE (ប្រើ auto, fp8_hq, turbo_2_1, turbo_lite_2_1 ឬ int8_2_1)" ;;
 esac
 
 WEIGHTS_GB=$(( DM_GB + TE_GB + VA_GB ))

@@ -71,6 +71,11 @@ IMAGE_VAE = os.environ.get("IMAGE_VAE", "qwen_image_vae.safetensors")
 # TextEncodeQwenImage21 (Qwen3-VL encoder) and is published for cfg 1, while
 # 1.0 uses plain CLIPTextEncode at cfg 2.5. Detected from the checkpoint name.
 IMAGE_FAMILY = "qwen_image21" if "2.1" in IMAGE_MODEL else "qwen_image"
+# Qwen-Image 2.1 turbo checkpoints are distilled for one fixed 8-step noise
+# schedule, which the official template pins inside a ManualSigmas node. A
+# plain KSampler with 8 steps would come out soft, so turbo gets its own graph.
+IMAGE_TURBO = "turbo" in IMAGE_MODEL.lower()
+TURBO_SIGMAS = "1.0, 0.978453, 0.95418, 0.926626, 0.89508, 0.845148, 0.704534, 0.414568, 0"
 IMAGE_STEPS = int(os.environ.get("IMAGE_STEPS", "20"))
 IMAGE_TIMEOUT = int(os.environ.get("IMAGE_TIMEOUT", "900"))
 
@@ -220,7 +225,7 @@ def _workflow(prompt: str, negative: str, width: int, height: int, seed: int,
     if IMAGE_FAMILY == "qwen_image21":
         # Matches ComfyUI's official Qwen-Image 2.1 text-to-image template.
         # At cfg 1 the sampler skips the negative pass, so no extra cost.
-        return {
+        wf = {
             "1": {"class_type": "UNETLoader",
                   "inputs": {"unet_name": IMAGE_MODEL, "weight_dtype": "default"}},
             "2": {"class_type": "CLIPLoader",
@@ -232,16 +237,39 @@ def _workflow(prompt: str, negative: str, width: int, height: int, seed: int,
                              "resolution": max(width, height)}},
             "6": {"class_type": "EmptyLatentImage",
                   "inputs": {"width": width, "height": height, "batch_size": 1}},
-            "7": {"class_type": "KSampler",
-                  "inputs": {"model": ["1", 0], "positive": ["4", 0],
-                             "negative": ["4", 1], "latent_image": ["6", 0],
-                             "seed": seed, "steps": steps, "cfg": 1.0,
-                             "sampler_name": "euler", "scheduler": "simple",
-                             "denoise": 1.0}},
-            "8": {"class_type": "VAEDecode", "inputs": {"samples": ["7", 0], "vae": ["3", 0]}},
-            "9": {"class_type": "SaveImage",
-                  "inputs": {"images": ["8", 0], "filename_prefix": "buffy"}},
         }
+        if IMAGE_TURBO:
+            # Turbo LoRA/checkpoint graph: the 8-step schedule lives in
+            # ManualSigmas, so the sampler is CustomAdvanced and `steps` is
+            # ignored on purpose — that schedule is what makes 8 steps work.
+            wf.update({
+                "10": {"class_type": "RandomNoise", "inputs": {"noise_seed": seed}},
+                "11": {"class_type": "CFGGuider",
+                       "inputs": {"model": ["1", 0], "positive": ["4", 0],
+                                  "negative": ["4", 1], "cfg": 1.0}},
+                "12": {"class_type": "KSamplerSelect", "inputs": {"sampler_name": "euler"}},
+                "13": {"class_type": "ManualSigmas", "inputs": {"sigmas": TURBO_SIGMAS}},
+                "14": {"class_type": "SamplerCustomAdvanced",
+                       "inputs": {"noise": ["10", 0], "guider": ["11", 0],
+                                  "sampler": ["12", 0], "sigmas": ["13", 0],
+                                  "latent_image": ["6", 0]}},
+                "8": {"class_type": "VAEDecode",
+                      "inputs": {"samples": ["14", 0], "vae": ["3", 0]}},
+            })
+        else:
+            wf.update({
+                "7": {"class_type": "KSampler",
+                       "inputs": {"model": ["1", 0], "positive": ["4", 0],
+                                  "negative": ["4", 1], "latent_image": ["6", 0],
+                                  "seed": seed, "steps": steps, "cfg": 1.0,
+                                  "sampler_name": "euler", "scheduler": "simple",
+                                  "denoise": 1.0}},
+                "8": {"class_type": "VAEDecode",
+                      "inputs": {"samples": ["7", 0], "vae": ["3", 0]}},
+            })
+        wf["9"] = {"class_type": "SaveImage",
+                   "inputs": {"images": ["8", 0], "filename_prefix": "buffy"}}
+        return wf
     return {
         "1": {"class_type": "UNETLoader",
               "inputs": {"unet_name": IMAGE_MODEL, "weight_dtype": "default"}},

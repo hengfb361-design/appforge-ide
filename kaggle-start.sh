@@ -1,14 +1,18 @@
 #!/usr/bin/env bash
-# Buffy AI — Qwen-Image (បង្កើតរូបភាព) ក្នុង Google Kaggle ដោយបន្ទាត់តែមួយ។
+# Buffy AI — Qwen-Image (បង្កើតរូបភាព) ក្នុង Google Kaggle ឬ Colab ដោយបន្ទាត់តែមួយ។
 #
-# ក្នុង cell ថ្មីរបស់ Kaggle សរសេរបន្ទាត់នេះ (មាន «!» នៅដើម)៖
+# Kaggle (cell ថ្មី)៖
 #
-#   !curl -fsSL -o /kaggle/working/buffy-image-start.sh https://raw.githubusercontent.com/hengfb361-design/buffy-ai/main/kaggle-start.sh && bash /kaggle/working/buffy-image-start.sh
+#   !curl -fsSL -o /kaggle/temp/buffy-start.sh https://raw.githubusercontent.com/hengfb361-design/buffy-ai/main/kaggle-start.sh && bash /kaggle/temp/buffy-start.sh
+#
+# Google Colab (Runtime → Change runtime type → T4 GPU)៖
+#
+#   !curl -fsSL -o /content/buffy-start.sh https://raw.githubusercontent.com/hengfb361-design/buffy-ai/main/kaggle-start.sh && bash /content/buffy-start.sh
 #
 # script នេះនឹង៖
 #   ១. ពិនិត្យ GPU / VRAM / disk
 #   ២. ដំឡើង ComfyUI (engine សម្រាប់ Qwen-Image)
-#   ៣. ទាញយក qwen_image_fp8_hq.safetensors + text encoder + VAE ទៅ /kaggle/temp
+#   ៣. ទាញយក diffusion model + text encoder + VAE ទៅ $ROOT_DIR/buffy-image-models
 #   ៤. បើក ComfyUI (ផ្ទៃក្នុង) + server Buffy (local_app.py) + tunnel តែមួយ
 #   ៥. បង្ហាញ URL សម្រាប់ website — គ្មាន API key ត្រូវការ
 #
@@ -24,18 +28,24 @@
 set -euo pipefail
 
 RAW_BASE="${BUFFY_RAW_BASE:-https://raw.githubusercontent.com/hengfb361-design/buffy-ai/main}"
-# /kaggle/working quota ~១៩GB ពេញលឿន (ComfyUI + pip) → ងាយបណ្តាលអោយ curl error 23.
-# /kaggle/temp ទីទំនេរធំជាង → ដាក់ការងារទាំងអស់នៅទីនោះ
-if [ -z "${BUFFY_HOME:-}" ] && [ -d /kaggle/temp ]; then
-  WORK="/kaggle/temp/buffy-image"
+SELF="${BASH_SOURCE[0]:-$0}"
+# Kaggle: /kaggle/working quota ~១៩GB ពេញលឿន (ComfyUI + pip) → ប្រើ /kaggle/temp ដែលធំជាង
+# Colab: /content (disk ~៧៨GB) — ត្រូវបានលុបពេលបិទ runtime
+if [ -n "${BUFFY_HOME:-}" ]; then
+  ROOT_DIR="$(dirname "$BUFFY_HOME")"
+  WORK="$BUFFY_HOME"
+elif [ -d /kaggle/temp ]; then
+  ROOT_DIR="/kaggle/temp";  WORK="$ROOT_DIR/buffy-image"
+elif [ -d /content ]; then
+  ROOT_DIR="/content";      WORK="$ROOT_DIR/buffy-image"
 else
-  WORK="${BUFFY_HOME:-/kaggle/working/buffy-image}"
+  ROOT_DIR="$HOME";         WORK="$ROOT_DIR/buffy-image"
 fi
 COMFY_PORT="${COMFY_PORT:-8188}"
 PORT="${PORT:-8000}"
 
-# model ធំៗ ត្រូវដាក់ /kaggle/temp (quota ខ្ពស់ជាង /kaggle/working ~20GB)
-MODELS_DIR="${BUFFY_MODELS_DIR:-/kaggle/temp/buffy-image-models}"
+# model ធំៗ ដាក់ក្រៅ ComfyUI (ប្រើ extra_model_paths) ដើម្បីកុំ copy ទ្វេ
+MODELS_DIR="${BUFFY_MODELS_DIR:-$ROOT_DIR/buffy-image-models}"
 
 say()  { printf '\n\033[1;36m%s\033[0m\n' "$*"; }
 ok()   { printf '\033[1;32m✅ %s\033[0m\n' "$*"; }
@@ -54,7 +64,7 @@ if command -v nvidia-smi >/dev/null 2>&1; then
   nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null || true
 fi
 if [ "$VRAM_GIB" -eq 0 ]; then
-  warn "រកមិនឃើញ GPU — សូមបើក Settings → Accelerator → GPU T4 x2 ក្នុង Kaggle សិន"
+  warn "រកមិនឃើញ GPU — Kaggle: Settings → Accelerator → GPU T4 x2 · Colab: Runtime → Change runtime type → T4 GPU"
   die  "ត្រូវការ GPU សម្រាប់បង្កើតរូបភាព"
 fi
 ok "GPU មាន VRAM ${VRAM_GIB}GB"
@@ -113,7 +123,7 @@ esac
 WEIGHTS_GB=$(( DM_GB + TE_GB + VA_GB ))
 if [ "$MEM_GIB" -gt 0 ] && [ "$WEIGHTS_GB" -gt "$MEM_GIB" ]; then
   warn "weights ${WEIGHTS_GB}GB > RAM ${MEM_GIB}GB → ត្រូវអានពី disk រាល់ជំហាន (យឺត ~៣០ វិនាទី/ជំហាន)"
-  echo "   ដំណោះស្រាយ៖ !BUFFY_IMAGE_MODEL=int8_2_1 bash /kaggle/working/buffy-image-start.sh"
+  echo "   ដំណោះស្រាយ៖ !BUFFY_IMAGE_MODEL=int8_2_1 bash $SELF"
 fi
 
 NEED_GB=$(( DM_GB + TE_GB + VA_GB + 6 ))
@@ -127,8 +137,9 @@ echo "   ត្រូវការ: ~${NEED_GB}GB   ទំនេរ: ${FREE_GB}GB
 if [ "$FREE_GB" -lt "$NEED_GB" ]; then
   warn "disk មិនគ្រប់!"
   echo "   ដំណោះស្រាយ ១ — ប្រើ model ស្រាលជាង (សម T4 16GB ផងដែរ)៖"
-  echo "   !BUFFY_IMAGE_MODEL=int8_2_1 bash /kaggle/working/buffy-image-start.sh"
-  echo "   ដំណោះស្រាយ ២ — Kaggle → Settings → 'Clear working directory' រួច run ម្តងទៀត"
+  echo "   !BUFFY_IMAGE_MODEL=turbo_lite_2_1 bash $SELF"
+  echo "   ដំណោះស្រាយ ២ — Kaggle: Settings → 'Clear working directory' · Colab: Runtime → Disconnect and delete runtime"
+  echo "   រួច run បន្ទាត់ដើមម្តងទៀត"
   die "គ្មានទំហំគ្រប់សម្រាប់ $LABEL"
 fi
 ok "disk គ្រប់"
@@ -141,7 +152,7 @@ if [ ! -d "$WORK/ComfyUI/.git" ]; then
 fi
 cd "$WORK/ComfyUI"
 
-# torch មានស្រាប់ក្នុង Kaggle — មិនដំឡើងឡើងវិញ (សន្សំ disk/ពេល)
+# torch មានស្រាប់ទាំង Kaggle និង Colab — មិនដំឡើងឡើងវិញ (សន្សំ disk/ពេល)
 python3 -m pip install -q --upgrade pip >/dev/null 2>&1 || true
 python3 -m pip install -q -r requirements.txt 2>&1 | tail -3 || die "pip install មិនបាន"
 python3 -m pip install -q huggingface_hub 2>&1 | tail -2 || true
@@ -176,7 +187,7 @@ for sub, (repo, path) in MAP.items():
 PY
 ok "model ទាញយករួច"
 
-# ComfyUI អាន model ពីខាងក្រៅ (មិន copy 32GB ចូល /kaggle/working)
+# ComfyUI អាន model ពីខាងក្រៅ (មិន copy ១៧GB ចូល folder ComfyUI)
 cat > "$WORK/extra_model_paths.yaml" <<EOF
 buffy:
   base_path: $MODELS_DIR
@@ -203,7 +214,7 @@ if [ "$VRAM_GIB" -lt "$DM_GB" ]; then
   warn "VRAM ${VRAM_GIB}GB < model ${DM_GB}GB → ប្រើ --lowvram (យឺត តែដំណើរការ)"
   if [ "$MODEL_CHOICE" = "fp8_hq" ] && [ "$VRAM_GIB" -lt 24 ]; then
     warn "fp8_hq យឺតខ្លាំងលើ T4 (~៣០ វិនាទី/ជំហាន)។ ប្រើ auto ដើម្បីលឿនជាង ~៣ ដង៖"
-    echo "   !bash /kaggle/working/buffy-image-start.sh        # auto → int8_2_1"
+    echo "   !bash $SELF        # auto → turbo_2_1"
   fi
 fi
 

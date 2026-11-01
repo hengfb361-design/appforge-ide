@@ -15,7 +15,7 @@
 # ជម្រើស model (env BUFFY_IMAGE_MODEL = auto | fp8_hq | int8_2_1)៖
 #   auto     = ជ្រើសតាម VRAM (លំនាំដើម) — VRAM < 24GB → int8_2_1
 #   fp8_hq   = Qwen-Image fp8_hq · 22.7 + 9.4 + 0.3GB = 32.4GB (ត្រូវការ VRAM ≥ 24GB)
-#   int8_2_1 = Qwen-Image-2.1 · 7.3 + 6.3 + 0.7GB = 14.3GB (សម T4 15GB)
+#   int8_2_1 = Qwen-Image-2.1 · 7.3 + 9.4 + 0.7GB = 17.3GB (សម T4 15GB)
 #
 # ហេតុអ្វី auto ជ្រើស int8 លើ T4៖ weights 32.4GB ធំជាងទាំង VRAM ១៥GB និង RAM ៣០GB
 # → ComfyUI ត្រូវអាន weight ពី disk រាល់ជំហាន (~៣០ វិនាទី/ជំហាន)។ លើសពីនេះ T4 គ្មាន FP8
@@ -77,12 +77,12 @@ case "$MODEL_CHOICE" in
     LABEL="Qwen-Image fp8_hq (គុណភាពខ្ពស់បំផុត)" ;;
   int8_2_1)
     DM_REPO="Comfy-Org/Qwen-Image-2.1"; DM_FILE="diffusion_models/qwen_image_2.1_int8_convrot.safetensors"; DM_GB=8
-    TE_REPO="Comfy-Org/Qwen-Image-2.1"; TE_FILE="text_encoders/qwen3vl_8b_w4a8.safetensors";                TE_GB=7
+    TE_REPO="Comfy-Org/Qwen-Image-2.1"; TE_FILE="text_encoders/qwen3vl_8b_int8_convrot.safetensors";       TE_GB=10
     VA_REPO="Comfy-Org/Qwen-Image-2.1"; VA_FILE="vae/qwen_image_2.1_vae_bf16.safetensors";                   VA_GB=1
     DM_NAME="qwen_image_2.1_int8_convrot.safetensors"
-    TE_NAME="qwen3vl_8b_w4a8.safetensors"
+    TE_NAME="qwen3vl_8b_int8_convrot.safetensors"
     VA_NAME="qwen_image_2.1_vae_bf16.safetensors"
-    LABEL="Qwen-Image-2.1 int8 (ស្រាល — សម T4)" ;;
+    LABEL="Qwen-Image-2.1 int8 (ស្រាល · 17GB — សម T4)" ;;
   *) die "BUFFY_IMAGE_MODEL មិនស្គាល់: $MODEL_CHOICE (ប្រើ auto, fp8_hq ឬ int8_2_1)" ;;
 esac
 

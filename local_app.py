@@ -67,6 +67,10 @@ IMAGE_BASE_URL = os.environ.get("IMAGE_BASE_URL", "").rstrip("/")
 IMAGE_MODEL = os.environ.get("IMAGE_MODEL", "qwen_image_fp8_hq.safetensors")
 IMAGE_CLIP = os.environ.get("IMAGE_CLIP", "qwen_2.5_vl_7b_fp8_scaled.safetensors")
 IMAGE_VAE = os.environ.get("IMAGE_VAE", "qwen_image_vae.safetensors")
+# Qwen-Image 2.1 is a different graph: it conditions through
+# TextEncodeQwenImage21 (Qwen3-VL encoder) and is published for cfg 1, while
+# 1.0 uses plain CLIPTextEncode at cfg 2.5. Detected from the checkpoint name.
+IMAGE_FAMILY = "qwen_image21" if "2.1" in IMAGE_MODEL else "qwen_image"
 IMAGE_STEPS = int(os.environ.get("IMAGE_STEPS", "20"))
 IMAGE_TIMEOUT = int(os.environ.get("IMAGE_TIMEOUT", "900"))
 
@@ -213,6 +217,30 @@ def _workflow(prompt: str, negative: str, width: int, height: int, seed: int,
               steps: int = 0) -> dict:
     """Minimal Qwen-Image text-to-image graph for ComfyUI's /prompt API."""
     steps = steps or IMAGE_STEPS
+    if IMAGE_FAMILY == "qwen_image21":
+        # Matches ComfyUI's official Qwen-Image 2.1 text-to-image template.
+        # At cfg 1 the sampler skips the negative pass, so no extra cost.
+        return {
+            "1": {"class_type": "UNETLoader",
+                  "inputs": {"unet_name": IMAGE_MODEL, "weight_dtype": "default"}},
+            "2": {"class_type": "CLIPLoader",
+                  "inputs": {"clip_name": IMAGE_CLIP, "type": "qwen_image"}},
+            "3": {"class_type": "VAELoader", "inputs": {"vae_name": IMAGE_VAE}},
+            "4": {"class_type": "TextEncodeQwenImage21",
+                  "inputs": {"clip": ["2", 0], "prompt": prompt,
+                             "negative_prompt": negative}},
+            "6": {"class_type": "EmptyLatentImage",
+                  "inputs": {"width": width, "height": height, "batch_size": 1}},
+            "7": {"class_type": "KSampler",
+                  "inputs": {"model": ["1", 0], "positive": ["4", 0],
+                             "negative": ["4", 1], "latent_image": ["6", 0],
+                             "seed": seed, "steps": steps, "cfg": 1.0,
+                             "sampler_name": "euler", "scheduler": "simple",
+                             "denoise": 1.0}},
+            "8": {"class_type": "VAEDecode", "inputs": {"samples": ["7", 0], "vae": ["3", 0]}},
+            "9": {"class_type": "SaveImage",
+                  "inputs": {"images": ["8", 0], "filename_prefix": "buffy"}},
+        }
     return {
         "1": {"class_type": "UNETLoader",
               "inputs": {"unet_name": IMAGE_MODEL, "weight_dtype": "default"}},

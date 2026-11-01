@@ -47,6 +47,30 @@ Repo៖ https://github.com/hengfb361-design/buffy-ai
 > script ទាញ `local_app.py` និង `ui.py` ពី branch `main` ដូចគ្នា — ដូច្នេះបើអ្នកកែ server
 > ត្រូវ push សិន។ Mirror (Freebuff Sites) មានឯកសារដូចគ្នានិងដំណើរការដូចគ្នា។
 
+## Kaggle — បង្កើតរូបភាព (Qwen-Image 22.7GB)
+
+Kaggle cell ថ្មី (មាន `!` ដើម)៖
+
+```bash
+!curl -fsSL -o /kaggle/working/buffy-image-start.sh https://raw.githubusercontent.com/hengfb361-design/buffy-ai/main/kaggle-start.sh && bash /kaggle/working/buffy-image-start.sh
+```
+
+ជ្រើស **Settings → Accelerator → GPU T4 x2** សិន។ Script ដំឡើង **ComfyUI**, ទាញយក model
+ទៅ `/kaggle/temp` (ព្រោះ `/kaggle/working` មានតែ ~20GB), រួចបើក tunnel សាធារណៈ។
+
+| ជម្រើស | ឯកសារ | ទំហំ | សម្រាប់ |
+|---|---|---|---|
+| `fp8_hq` (default) | `qwen_image_fp8_hq.safetensors` | 22.7 GB + TE 9.4 GB | គុណភាពខ្ពស់បំផុត |
+| `int8_2_1` | `qwen_image_2.1_int8_convrot.safetensors` | 7.3 GB + TE 6.3 GB | T4 16GB ស្រាល/លឿន |
+
+```bash
+# model ស្រាល (ណែនាំសម្រាប់ T4 16GB)
+!BUFFY_IMAGE_MODEL=int8_2_1 bash /kaggle/working/buffy-image-start.sh
+```
+
+> ⚠️ **T4 មាន VRAM 16GB < model 22.7GB** → script ប្រើ `--lowvram` (offload ទៅ RAM 29GB)
+> ដោយស្វ័យប្រវត្តិ។ វាដំណើរការ តែរាល់រូបយឺត ~2–8 នាទី។ ចង់លឿន → ប្រើ `int8_2_1` (7.3GB ចូល VRAM)។
+
 ## របៀបប្រើតាម notebook
 
 1. បើក https://colab.research.google.com → **Upload** `Qwen_Code_Colab.ipynb`

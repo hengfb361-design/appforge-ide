@@ -1030,9 +1030,25 @@ def health(request: Request):
 # The browser builds the project files; this server only needs a GitHub token
 # to create the repo, push them and hand the finished APK back. The token is
 # read from the environment and never reaches the browser.
-_AF_TOKEN = (os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
-             or os.environ.get("GITHUB_API") or os.environ.get("GITHUB_API_KEY")
-             or "").strip()
+# Render keeps the key exactly as typed, so "Github_api" and "GITHUB_TOKEN"
+# must both work; env names are case sensitive on Linux otherwise.
+_AF_TOKEN_NAMES = ("GITHUB_TOKEN", "GH_TOKEN", "GITHUB_API", "GITHUB_API_KEY",
+                   "Github_api", "Github_apiclassic")
+
+
+def _af_token() -> str:
+    wanted = {n.lower() for n in _AF_TOKEN_NAMES}
+    for name in _AF_TOKEN_NAMES:
+        value = (os.environ.get(name) or "").strip()
+        if value:
+            return value
+    for key, value in os.environ.items():
+        if key.lower() in wanted and (value or "").strip():
+            return value.strip()
+    return ""
+
+
+_AF_TOKEN = _af_token()  # kept for tests; endpoints re-read so a rotation works
 _AF_API = "https://api.github.com"
 _AF_HITS = {}
 _AF_LOCK = threading.Lock()
@@ -1045,7 +1061,7 @@ def _gh(method: str, path: str, payload=None):
     return requests.request(
         method, _AF_API + path, json=payload, timeout=45,
         headers={
-            "Authorization": "Bearer " + _AF_TOKEN,
+            "Authorization": "Bearer " + _af_token(),
             "Accept": "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28",
             "User-Agent": "AppForge/1.0",
@@ -1105,12 +1121,12 @@ def _af_files(payload) -> list:
 @app.get("/api/appforge/ready")
 def appforge_ready():
     """Lets the page hide the button instead of failing on click."""
-    return {"ok": True, "github": bool(_AF_TOKEN)}
+    return {"ok": True, "github": bool(_af_token())}
 
 
 @app.post("/api/appforge/build")
 async def appforge_build(request: Request):
-    if not _AF_TOKEN:
+    if not _af_token():
         return JSONResponse(
             {"detail": "Server មិនមាន GITHUB_TOKEN — បន្ថែមនៅ Render → Environment រួច deploy ម្តងទៀត។"},
             status_code=503,
@@ -1167,7 +1183,7 @@ async def appforge_build(request: Request):
 
 @app.get("/api/appforge/status")
 def appforge_status(repo: str = ""):
-    if not _AF_TOKEN:
+    if not _af_token():
         return JSONResponse({"detail": "Server មិនមាន GITHUB_TOKEN"}, status_code=503)
     full = _af_slug(repo)
     if not full:
@@ -1207,7 +1223,7 @@ def appforge_status(repo: str = ""):
 @app.get("/api/appforge/apk")
 def appforge_apk(repo: str = ""):
     """Streams the APK from the newest successful Actions run."""
-    if not _AF_TOKEN:
+    if not _af_token():
         return JSONResponse({"detail": "Server មិនមាន GITHUB_TOKEN"}, status_code=503)
     full = _af_slug(repo)
     if not full:
@@ -1224,7 +1240,7 @@ def appforge_apk(repo: str = ""):
             return JSONResponse({"detail": "គ្មាន artifact"}, status_code=409)
         archive = requests.get(
             art_list[0].get("archive_download_url"),
-            headers={"Authorization": "Bearer " + _AF_TOKEN, "User-Agent": "AppForge/1.0"},
+            headers={"Authorization": "Bearer " + _af_token(), "User-Agent": "AppForge/1.0"},
             timeout=120, allow_redirects=True,
         )
         if archive.status_code != 200:

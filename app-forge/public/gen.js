@@ -1,0 +1,1236 @@
+/* AppForge generator: turns a few answers into a complete, buildable Android
+   project plus the GitHub Actions workflow that produces a debug APK.
+   Pure functions only (no DOM) so the same file runs in the browser and in
+   Node for tests. */
+(function (root, factory) {
+  const api = factory();
+  if (typeof module === 'object' && module.exports) module.exports = api;
+  root.AppForge = api;
+})(typeof self !== 'undefined' ? self : this, function () {
+  'use strict';
+
+  const TEMPLATES = [
+    { id: 'desc', label: 'សរសេរការពិពណ៌នា → App', desc: 'សរសេរជាភាសាខ្មែរ/English ហើយទទួលបាន App ដែលដំណើរការ', icon: '🪄' },
+    { id: 'webview', label: 'វេបសាយ → App', desc: 'បើក URL របស់អ្នកក្នុង WebView ពេញអេក្រង់', icon: '🌐' },
+    { id: 'blank', label: 'App ទទួលទទេ', desc: 'Kotlin + XML សម្រាប់ចាប់ផ្តើមសរសេរខ្លួនឯង', icon: '🧩' },
+    { id: 'notes', label: 'App កត់ត្រា', desc: 'សរសេរ/លុបកំណត់ត្រា រក្សាទុកក្នុងទូរស័ព្ទ', icon: '📝' }
+  ];
+
+  function slug(name) {
+    const s = String(name || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+    return (s.slice(0, 24) || 'myapp');
+  }
+
+  function pascal(name) {
+    const words = String(name || '').replace(/[^A-Za-z0-9 ]+/g, ' ').split(/\s+/).filter(Boolean);
+    let s = words.map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join('');
+    s = s.replace(/[^A-Za-z0-9]/g, '');
+    if (!s || /^[0-9]/.test(s)) s = 'App' + s;
+    return s.slice(0, 30) || 'MyApp';
+  }
+
+  function packageOf(name, custom) {
+    const p = String(custom || '').trim().toLowerCase();
+    if (/^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$/.test(p)) return p;
+    return 'com.example.' + slug(name);
+  }
+
+  function hexColor(value, fallback) {
+    const v = String(value || '').trim();
+    return /^#[0-9a-fA-F]{6}$/.test(v) ? v.toUpperCase() : fallback;
+  }
+
+  function darker(hex, factor) {
+    const n = parseInt(hex.slice(1), 16);
+    const f = Math.max(0, Math.min(1, factor));
+    const r = Math.round(((n >> 16) & 255) * f);
+    const g = Math.round(((n >> 8) & 255) * f);
+    const b = Math.round((n & 255) * f);
+    return '#' + [r, g, b].map((c) => c.toString(16).padStart(2, '0')).join('').toUpperCase();
+  }
+
+  function normalize(cfg) {
+    const c = cfg || {};
+    const name = String(c.name || '').trim() || 'My App';
+    const template = TEMPLATES.some((t) => t.id === c.template) ? c.template : 'desc';
+    const color = hexColor(c.color, '#12B886');
+    const url = String(c.url || '').trim();
+    const toggles = c.toggles || {};
+    return {
+      name: name.slice(0, 40),
+      pkg: packageOf(name, c.pkg),
+      template: template,
+      color: color,
+      colorDark: darker(color, 0.72),
+      url: /^https?:\/\/[^\s]+$/.test(url) ? url : 'https://example.com',
+      versionName: (String(c.versionName || '1.0').trim() || '1.0').slice(0, 20),
+      versionCode: Math.max(1, Math.min(2147483647, parseInt(c.versionCode, 10) || 1)),
+      js: toggles.js !== false,
+      back: toggles.back !== false,
+      pull: !!toggles.pull,
+      external: !!toggles.external,
+      dark: toggles.dark !== false,
+      description: String(c.description || '').slice(0, 4000)
+    };
+  }
+
+  /* ---------------------------- Android sources ---------------------------- */
+
+  function settingsGradle(c) {
+    return [
+      'pluginManagement {',
+      '    repositories {',
+      '        google()',
+      '        mavenCentral()',
+      '        gradlePluginPortal()',
+      '    }',
+      '}',
+      'dependencyResolutionManagement {',
+      '    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)',
+      '    repositories {',
+      '        google()',
+      '        mavenCentral()',
+      '    }',
+      '}',
+      'rootProject.name = "' + pascal(c.name) + '"',
+      'include(":app")',
+      ''
+    ].join('\n');
+  }
+
+  function rootGradle() {
+    return [
+      'plugins {',
+      '    id("com.android.application") version "8.5.2" apply false',
+      '    id("org.jetbrains.kotlin.android") version "1.9.24" apply false',
+      '}',
+      ''
+    ].join('\n');
+  }
+
+  function appGradle(c) {
+    const deps = [
+      '    implementation("androidx.core:core-ktx:1.13.1")',
+      '    implementation("androidx.appcompat:appcompat:1.7.0")',
+      '    implementation("com.google.android.material:material:1.12.0")'
+    ];
+    if (c.template === 'webview' && c.pull) {
+      deps.push('    implementation("androidx.swiperefreshlayout:swiperefreshlayout:1.1.0")');
+    }
+    return [
+      'plugins {',
+      '    id("com.android.application")',
+      '    id("org.jetbrains.kotlin.android")',
+      '}',
+      '',
+      'android {',
+      '    namespace = "' + c.pkg + '"',
+      '    compileSdk = 34',
+      '',
+      '    defaultConfig {',
+      '        applicationId = "' + c.pkg + '"',
+      '        minSdk = 24',
+      '        targetSdk = 34',
+      '        versionCode = ' + c.versionCode,
+      '        versionName = "' + c.versionName + '"',
+      '    }',
+      '',
+      '    buildTypes {',
+      '        release {',
+      '            isMinifyEnabled = false',
+      '            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")',
+      '        }',
+      '    }',
+      '',
+      '    compileOptions {',
+      '        sourceCompatibility = JavaVersion.VERSION_17',
+      '        targetCompatibility = JavaVersion.VERSION_17',
+      '    }',
+      '    kotlinOptions {',
+      '        jvmTarget = "17"',
+      '    }',
+      '}',
+      '',
+      'dependencies {',
+      deps.join('\n'),
+      '}',
+      ''
+    ].join('\n');
+  }
+
+  function manifest(c, hasInternet) {
+    const activityAttr = c.template === 'webview'
+      ? ['            android:configChanges="orientation|screenSize|keyboardHidden"']
+      : [];
+    const appAttrs = [
+      '        android:allowBackup="true"',
+      '        android:icon="@drawable/ic_launcher"',
+      '        android:label="@string/app_name"',
+      '        android:supportsRtl="true"',
+      c.template === 'webview' ? '        android:usesCleartextTraffic="true"' : null,
+      '        android:theme="@style/Theme.' + pascal(c.name) + '">'
+    ].filter(Boolean);
+    return [
+      '<?xml version="1.0" encoding="utf-8"?>',
+      '<manifest xmlns:android="http://schemas.android.com/apk/res/android">',
+      hasInternet ? '    <uses-permission android:name="android.permission.INTERNET" />' : '',
+      '    <application',
+      appAttrs.join('\n'),
+      '        <activity',
+      '            android:name=".MainActivity"',
+      '            android:exported="true"',
+      activityAttr.length ? activityAttr.join('\n') : null,
+      '            >',
+      '            <intent-filter>',
+      '                <action android:name="android.intent.action.MAIN" />',
+      '                <category android:name="android.intent.category.LAUNCHER" />',
+      '            </intent-filter>',
+      '        </activity>',
+      '    </application>',
+      '</manifest>',
+      ''
+    ].filter((line) => line !== null).join('\n');
+  }
+
+  function stringsXml(c) {
+    return [
+      '<?xml version="1.0" encoding="utf-8"?>',
+      '<resources>',
+      '    <string name="app_name">' + escapeXml(c.name) + '</string>',
+      '</resources>',
+      ''
+    ].join('\n');
+  }
+
+  function colorsXml(c) {
+    return [
+      '<?xml version="1.0" encoding="utf-8"?>',
+      '<resources>',
+      '    <color name="brand">' + c.color + '</color>',
+      '    <color name="brand_dark">' + c.colorDark + '</color>',
+      '    <color name="page">#0B0F14</color>',
+      '    <color name="text">#EAF2FF</color>',
+      '</resources>',
+      ''
+    ].join('\n');
+  }
+
+  function themesXml(c) {
+    return [
+      '<?xml version="1.0" encoding="utf-8"?>',
+      '<resources xmlns:tools="http://schemas.android.com/tools">',
+      '    <style name="Theme.' + pascal(c.name) + '" parent="Theme.Material3.DayNight.NoActionBar">',
+      '        <item name="colorPrimary">@color/brand</item>',
+      '        <item name="colorSecondary">@color/brand</item>',
+      '        <item name="android:statusBarColor">@color/brand_dark</item>',
+      '        <item name="android:navigationBarColor">@color/page</item>',
+      '    </style>',
+      '</resources>',
+      ''
+    ].join('\n');
+  }
+
+  function themesNightXml(c) {
+    return [
+      '<?xml version="1.0" encoding="utf-8"?>',
+      '<resources>',
+      '    <style name="Theme.' + pascal(c.name) + '" parent="Theme.Material3.DayNight.NoActionBar">',
+      '        <item name="colorPrimary">@color/brand</item>',
+      '        <item name="colorSecondary">@color/brand</item>',
+      '        <item name="android:statusBarColor">@color/page</item>',
+      '        <item name="android:navigationBarColor">@color/page</item>',
+      '    </style>',
+      '</resources>',
+      ''
+    ].join('\n');
+  }
+
+  function launcherXml(c) {
+    return [
+      '<?xml version="1.0" encoding="utf-8"?>',
+      '<vector xmlns:android="http://schemas.android.com/apk/res/android"',
+      '    android:width="108dp"',
+      '    android:height="108dp"',
+      '    android:viewportWidth="108"',
+      '    android:viewportHeight="108">',
+      '    <path',
+      '        android:fillColor="' + c.color + '"',
+      '        android:pathData="M0,0h108v108h-108z" />',
+      '    <path',
+      '        android:fillColor="#FFFFFFFF"',
+      '        android:pathData="M60,16L30,62h20l-4,30 32,-48h-21z" />',
+      '</vector>',
+      ''
+    ].join('\n');
+  }
+
+  function escapeXml(s) {
+    return String(s).replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' }[ch]));
+  }
+
+  function mainActivityWebView(c) {
+    const refresh = c.pull;
+    const lines = [
+      'package ' + c.pkg,
+      '',
+      'import android.annotation.SuppressLint',
+      'import android.content.Intent',
+      'import android.graphics.Color',
+      'import android.net.Uri',
+      'import android.os.Bundle',
+      'import android.webkit.WebChromeClient',
+      'import android.webkit.WebResourceRequest',
+      'import android.webkit.WebView',
+      'import android.webkit.WebViewClient',
+      'import androidx.activity.OnBackPressedCallback',
+      'import androidx.appcompat.app.AppCompatActivity',
+      refresh ? 'import androidx.swiperefreshlayout.widget.SwipeRefreshLayout' : null,
+      '',
+      'class MainActivity : AppCompatActivity() {',
+      '    private lateinit var web: WebView',
+      refresh ? '    private lateinit var refreshLayout: SwipeRefreshLayout' : null,
+      '',
+      '    @SuppressLint("SetJavaScriptEnabled")',
+      '    override fun onCreate(savedInstanceState: Bundle?) {',
+      '        super.onCreate(savedInstanceState)',
+      refresh
+        ? '        setContentView(R.layout.activity_main)\n        refreshLayout = findViewById(R.id.refresh)\n        web = findViewById(R.id.web)'
+        : '        web = WebView(this)\n        setContentView(web)',
+      '        web.setBackgroundColor(Color.parseColor("#0B0F14"))',
+      '        web.settings.javaScriptEnabled = ' + (c.js ? 'true' : 'false'),
+      '        web.settings.domStorageEnabled = true',
+      '        web.settings.loadWithOverviewMode = true',
+      '        web.settings.useWideViewPort = true',
+      '        web.webChromeClient = WebChromeClient()',
+      '        web.webViewClient = object : WebViewClient() {',
+      c.external ? [
+        '            override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {',
+        '                val link = request.url',
+        '                val host = link.host ?: ""',
+        '                if (host.isNotEmpty() && !host.endsWith(APP_HOST)) {',
+        '                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(link.toString())))',
+        '                    return true',
+        '                }',
+        '                return false',
+        '            }'
+      ].join('\n') : [
+        '            override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {',
+        '                return false',
+        '            }'
+      ].join('\n'),
+      '        }',
+      refresh ? [
+        '        refreshLayout.setOnRefreshListener { web.reload() }',
+        '        web.webChromeClient = object : WebChromeClient() {',
+        '            override fun onProgressChanged(view: WebView, progress: Int) {',
+        '                refreshLayout.isRefreshing = progress < 100',
+        '            }',
+        '        }'
+      ].join('\n') : null,
+      '        web.loadUrl(START_URL)',
+      '    }',
+      '',
+      '    override fun onSaveInstanceState(outState: Bundle) {',
+      '        super.onSaveInstanceState(outState)',
+      '        web.saveState(outState)',
+      '    }',
+      c.back ? [
+        '    override fun onBackPressed() {',
+        '        if (web.canGoBack()) web.goBack() else finish()',
+        '    }'
+      ].join('\n') : null,
+      '',
+      '    companion object {',
+      '        const val START_URL = "' + c.url.replace(/"/g, '') + '"',
+      '        const val APP_HOST = "' + hostOf(c.url) + '"',
+      '    }',
+      '}',
+      ''
+    ].filter((l) => l !== null);
+    return lines.join('\n');
+  }
+
+  function hostOf(url) {
+    const m = String(url).match(/^https?:\/\/([^/]+)/i);
+    return m ? m[1].toLowerCase().replace(/^www\./, '') : '';
+  }
+
+  function activityWebViewXml() {
+    return [
+      '<?xml version="1.0" encoding="utf-8"?>',
+      '<androidx.swiperefreshlayout.widget.SwipeRefreshLayout',
+      '    xmlns:android="http://schemas.android.com/apk/res/android"',
+      '    android:id="@+id/refresh"',
+      '    android:layout_width="match_parent"',
+      '    android:layout_height="match_parent">',
+      '',
+      '    <WebView',
+      '        android:id="@+id/web"',
+      '        android:layout_width="match_parent"',
+      '        android:layout_height="match_parent" />',
+      '',
+      '</androidx.swiperefreshlayout.widget.SwipeRefreshLayout>',
+      ''
+    ].join('\n');
+  }
+
+  function mainActivityBlank(c) {
+    return [
+      'package ' + c.pkg,
+      '',
+      'import android.os.Bundle',
+      'import android.widget.Button',
+      'import android.widget.TextView',
+      'import androidx.appcompat.app.AppCompatActivity',
+      '',
+      'class MainActivity : AppCompatActivity() {',
+      '    private var taps = 0',
+      '',
+      '    override fun onCreate(savedInstanceState: Bundle?) {',
+      '        super.onCreate(savedInstanceState)',
+      '        setContentView(R.layout.activity_main)',
+      '        val label = findViewById<TextView>(R.id.label)',
+      '        findViewById<Button>(R.id.tap).setOnClickListener {',
+      '            taps += 1',
+      '            label.text = "អ្នកចុច " + taps + " ដង"',
+      '        }',
+      '    }',
+      '}',
+      ''
+    ].join('\n');
+  }
+
+  function activityBlankXml(c) {
+    return [
+      '<?xml version="1.0" encoding="utf-8"?>',
+      '<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"',
+      '    android:layout_width="match_parent"',
+      '    android:layout_height="match_parent"',
+      '    android:background="@color/page"',
+      '    android:gravity="center"',
+      '    android:orientation="vertical"',
+      '    android:padding="24dp">',
+      '',
+      '    <TextView',
+      '        android:layout_width="wrap_content"',
+      '        android:layout_height="wrap_content"',
+      '        android:text="@string/app_name"',
+      '        android:textColor="@color/text"',
+      '        android:textSize="28sp"',
+      '        android:textStyle="bold" />',
+      '',
+      '    <TextView',
+      '        android:id="@+id/label"',
+      '        android:layout_width="wrap_content"',
+      '        android:layout_height="wrap_content"',
+      '        android:layout_marginTop="12dp"',
+      '        android:text="អ្នកចុច 0 ដង"',
+      '        android:textColor="@color/text"',
+      '        android:textSize="18sp" />',
+      '',
+      '    <Button',
+      '        android:id="@+id/tap"',
+      '        android:layout_width="wrap_content"',
+      '        android:layout_height="wrap_content"',
+      '        android:layout_marginTop="24dp"',
+      '        android:text="ចុច​ទីនេះ" />',
+      '',
+      '</LinearLayout>',
+      ''
+    ].join('\n');
+  }
+
+  function mainActivityNotes(c) {
+    return [
+      'package ' + c.pkg,
+      '',
+      'import android.os.Bundle',
+      'import android.widget.ArrayAdapter',
+      'import android.widget.Button',
+      'import android.widget.EditText',
+      'import android.widget.ListView',
+      'import android.widget.Toast',
+      'import androidx.appcompat.app.AppCompatActivity',
+      '',
+      'class MainActivity : AppCompatActivity() {',
+      '    private val notes = mutableListOf<String>()',
+      '    private lateinit var adapter: ArrayAdapter<String>',
+      '',
+      '    override fun onCreate(savedInstanceState: Bundle?) {',
+      '        super.onCreate(savedInstanceState)',
+      '        setContentView(R.layout.activity_main)',
+      '',
+      '        val input = findViewById<EditText>(R.id.input)',
+      '        val list = findViewById<ListView>(R.id.list)',
+      '        load()',
+      '',
+      '        adapter = ArrayAdapter(this, android.R.layout.simple_list_item_1, notes)',
+      '        list.adapter = adapter',
+      '',
+      '        findViewById<Button>(R.id.add).setOnClickListener {',
+      '            val text = input.text.toString().trim()',
+      '            if (text.isEmpty()) return@setOnClickListener',
+      '            notes.add(0, text)',
+      '            input.setText("")',
+      '            adapter.notifyDataSetChanged()',
+      '            save()',
+      '        }',
+      '',
+      '        list.setOnItemLongClickListener { _, _, position, _ ->',
+      '            notes.removeAt(position)',
+      '            adapter.notifyDataSetChanged()',
+      '            save()',
+      '            Toast.makeText(this, "លុបរួច", Toast.LENGTH_SHORT).show()',
+      '            true',
+      '        }',
+      '    }',
+      '',
+      '    private fun save() {',
+      '        getSharedPreferences("notes", MODE_PRIVATE)',
+      '            .edit()',
+      '            .putString("data", notes.joinToString(SEP))',
+      '            .apply()',
+      '    }',
+      '',
+      '    private fun load() {',
+      '        val raw = getSharedPreferences("notes", MODE_PRIVATE).getString("data", "") ?: ""',
+      '        if (raw.isNotEmpty()) notes.addAll(raw.split(SEP))',
+      '    }',
+      '',
+      '    companion object {',
+      '        private const val SEP = "\\u0001"',
+      '    }',
+      '}',
+      ''
+    ].join('\n');
+  }
+
+  function activityNotesXml() {
+    return [
+      '<?xml version="1.0" encoding="utf-8"?>',
+      '<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"',
+      '    android:layout_width="match_parent"',
+      '    android:layout_height="match_parent"',
+      '    android:background="@color/page"',
+      '    android:orientation="vertical"',
+      '    android:padding="16dp">',
+      '',
+      '    <LinearLayout',
+      '        android:layout_width="match_parent"',
+      '        android:layout_height="wrap_content"',
+      '        android:orientation="horizontal">',
+      '',
+      '        <EditText',
+      '            android:id="@+id/input"',
+      '            android:layout_width="0dp"',
+      '            android:layout_height="wrap_content"',
+      '            android:layout_weight="1"',
+      '            android:hint="សរសេរកំណត់ត្រា…"',
+      '            android:importantForAutofill="no"',
+      '            android:textColor="@color/text"',
+      '            android:textColorHint="#7A889B" />',
+      '',
+      '        <Button',
+      '            android:id="@+id/add"',
+      '            android:layout_width="wrap_content"',
+      '            android:layout_height="wrap_content"',
+      '            android:text="បន្ថែម" />',
+      '',
+      '    </LinearLayout>',
+      '',
+      '    <ListView',
+      '        android:id="@+id/list"',
+      '        android:layout_width="match_parent"',
+      '        android:layout_height="0dp"',
+      '        android:layout_marginTop="12dp"',
+      '        android:layout_weight="1" />',
+      '',
+      '</LinearLayout>',
+      ''
+    ].join('\n');
+  }
+
+  function workflowYaml(c) {
+    return [
+      'name: Build APK',
+      '',
+      'on:',
+      '  push:',
+      '    branches: [ main, master ]',
+      '  workflow_dispatch:',
+      '',
+      'jobs:',
+      '  build:',
+      '    runs-on: ubuntu-latest',
+      '    steps:',
+      '      - uses: actions/checkout@v4',
+      '',
+      '      - uses: actions/setup-java@v4',
+      '        with:',
+      '          distribution: temurin',
+      '          java-version: "17"',
+      '',
+      '      - uses: gradle/actions/setup-gradle@v4',
+      '        with:',
+      '          gradle-version: "8.7"',
+      '',
+      '      - name: Build debug APK',
+      '        run: gradle assembleDebug --no-daemon --stacktrace',
+      '',
+      '      - name: Upload APK',
+      '        uses: actions/upload-artifact@v4',
+      '        with:',
+      '          name: ' + slug(c.name) + '-apk',
+      '          path: app/build/outputs/apk/debug/*.apk',
+      '          if-no-files-found: error',
+      ''
+    ].join('\n');
+  }
+
+  function readme(c) {
+    const tpl = TEMPLATES.find((t) => t.id === c.template) || TEMPLATES[0];
+    return [
+      '# ' + c.name,
+      '',
+      'បង្កើតដោយ **AppForge** · ' + tpl.label + ' · `' + c.pkg + '`',
+      '',
+      '## របៀបបង្កើត APK (ឥតគិតថ្លៃ ~៣ នាទី)',
+      '',
+      '1. បង្កើត repo ថ្មីនៅ GitHub (Public ឬ Private ក៏បាន)។',
+      '2. Upload ឯកសារទាំងអស់ក្នុង ZIP នេះទៅ root របស់ repo',
+      '   (ត្រូវឃើញ `settings.gradle.kts` និងថត `.github/` នៅ root)។',
+      '3. ចូល **Actions** → *Build APK* → រង់ចាំ ~២–៤ នាទី។',
+      '4. ចុចលើ run ដែលជោគជ័យ → **Artifacts** → ទាញយក `' + slug(c.name) + '-apk.zip`។',
+      '5. ពន្លាត → បានឯកសារ `app-debug.apk` → ដំឡើងលើទូរស័ព្ទ',
+      '   (ត្រូវបើក "Install unknown apps" សម្រាប់ browser ដែលអ្នកប្រើ)។',
+      '',
+      '## បើ build មិនជោគជ័យ',
+      '',
+      '- Java/Gradle ខុស៖ workflow ប្រើ JDK 17 + Gradle 8.7 ស្រាប់ មិនត្រូវកែទេ។',
+      '- បើអ្នកប្តូរ `compileSdk` ត្រូវប្តូរ `buildToolsVersion`/AGP ឱ្យត្រូវគ្នា។',
+      '- Log កំហុសនៅ Actions → ចុច step ពណ៌ក្រហម។',
+      '',
+      '## ចំណាំ',
+      '',
+      '- APK នេះជា **debug** — ដំឡើងលើទូរស័ព្ទបាន តែដាក់លើ Play Store មិនបានទេ',
+      '  (ត្រូវការ release keystore + AAB)។',
+      '- បើ App ប្រើអ៊ីនធឺណិត ត្រូវមាន `<uses-permission android:name="android.permission.INTERNET" />`',
+      '  ដែលបានដាក់ឱ្យរួចហើយ។',
+      '- Package name: `' + c.pkg + '` · Version ' + c.versionName + ' (' + c.versionCode + ')',
+      ''
+    ].join('\n');
+  }
+
+  function gitignore() {
+    return [
+      '*.iml',
+      '.gradle/',
+      '/local.properties',
+      '.idea/',
+      'build/',
+      'captures/',
+      '.externalNativeBuild/',
+      ''
+    ].join('\n');
+  }
+
+  /* ------------------------------- assembly ------------------------------- */
+
+  function build(cfg) {
+    const c = normalize(cfg);
+    if (c.template === 'desc') return buildDescProject(c);
+    const files = [];
+    const add = (path, text) => files.push({ path: path, text: text });
+    const hasInternet = c.template === 'webview';
+
+    add('settings.gradle.kts', settingsGradle(c));
+    add('build.gradle.kts', rootGradle());
+    add('gradle.properties', [
+      'org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8',
+      'android.useAndroidX=true',
+      'kotlin.code.style=official',
+      'android.nonTransitiveRClass=true',
+      ''
+    ].join('\n'));
+    add('app/build.gradle.kts', appGradle(c));
+    add('app/proguard-rules.pro', '# Keep rules go here.\n');
+    add('app/src/main/AndroidManifest.xml', manifest(c, hasInternet));
+    add('app/src/main/res/values/strings.xml', stringsXml(c));
+    add('app/src/main/res/values/colors.xml', colorsXml(c));
+    add('app/src/main/res/values/themes.xml', themesXml(c));
+    if (c.dark) add('app/src/main/res/values-night/themes.xml', themesNightXml(c));
+    add('app/src/main/res/drawable/ic_launcher.xml', launcherXml(c));
+
+    const srcDir = 'app/src/main/java/' + c.pkg.split('.').join('/');
+    if (c.template === 'webview') {
+      add(srcDir + '/MainActivity.kt', mainActivityWebView(c));
+      if (c.pull) add('app/src/main/res/layout/activity_main.xml', activityWebViewXml());
+    } else if (c.template === 'notes') {
+      add(srcDir + '/MainActivity.kt', mainActivityNotes(c));
+      add('app/src/main/res/layout/activity_main.xml', activityNotesXml());
+    } else {
+      add(srcDir + '/MainActivity.kt', mainActivityBlank(c));
+      add('app/src/main/res/layout/activity_main.xml', activityBlankXml(c));
+    }
+
+    add('.github/workflows/build-apk.yml', workflowYaml(c));
+    add('README.md', readme(c));
+    add('.gitignore', gitignore());
+
+    return { config: c, files: files };
+  }
+
+  /* -------------------------------- ZIP I/O -------------------------------- */
+
+  let CRC_TABLE = null;
+  function crcTable() {
+    if (CRC_TABLE) return CRC_TABLE;
+    const table = new Uint32Array(256);
+    for (let i = 0; i < 256; i++) {
+      let c = i;
+      for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1;
+      table[i] = c >>> 0;
+    }
+    CRC_TABLE = table;
+    return table;
+  }
+
+  function crc32(bytes) {
+    const table = crcTable();
+    let crc = 0xFFFFFFFF;
+    for (let i = 0; i < bytes.length; i++) crc = table[(crc ^ bytes[i]) & 0xFF] ^ (crc >>> 8);
+    return (crc ^ 0xFFFFFFFF) >>> 0;
+  }
+
+  function concat(chunks) {
+    let total = 0;
+    for (const ch of chunks) total += ch.length;
+    const out = new Uint8Array(total);
+    let at = 0;
+    for (const ch of chunks) {
+      out.set(ch, at);
+      at += ch.length;
+    }
+    return out;
+  }
+
+  const DOS_TIME = (12 << 11) | (0 << 5) | 0;
+  const DOS_DATE = ((2026 - 1980) << 9) | (11 << 5) | 3;
+
+  function zip(files) {
+    const enc = new TextEncoder();
+    const parts = [];
+    const central = [];
+    let offset = 0;
+    for (const file of files) {
+      const nameBytes = enc.encode(file.path);
+      const data = typeof file.text === 'string' ? enc.encode(file.text) : file.data;
+      const sum = crc32(data);
+
+      const local = new Uint8Array(30 + nameBytes.length);
+      const lv = new DataView(local.buffer);
+      lv.setUint32(0, 0x04034b50, true);
+      lv.setUint16(4, 20, true);
+      lv.setUint16(6, 0x0800, true);
+      lv.setUint16(8, 0, true);
+      lv.setUint16(10, DOS_TIME, true);
+      lv.setUint16(12, DOS_DATE, true);
+      lv.setUint32(14, sum, true);
+      lv.setUint32(18, data.length, true);
+      lv.setUint32(22, data.length, true);
+      lv.setUint16(26, nameBytes.length, true);
+      lv.setUint16(28, 0, true);
+      local.set(nameBytes, 30);
+      parts.push(local, data);
+
+      const cd = new Uint8Array(46 + nameBytes.length);
+      const cv = new DataView(cd.buffer);
+      cv.setUint32(0, 0x02014b50, true);
+      cv.setUint16(4, 20, true);
+      cv.setUint16(6, 20, true);
+      cv.setUint16(8, 0x0800, true);
+      cv.setUint16(10, 0, true);
+      cv.setUint16(12, DOS_TIME, true);
+      cv.setUint16(14, DOS_DATE, true);
+      cv.setUint32(16, sum, true);
+      cv.setUint32(20, data.length, true);
+      cv.setUint32(24, data.length, true);
+      cv.setUint16(28, nameBytes.length, true);
+      cv.setUint16(30, 0, true);
+      cv.setUint16(32, 0, true);
+      cv.setUint16(34, 0, true);
+      cv.setUint16(36, 0, true);
+      cv.setUint32(38, 0, true);
+      cv.setUint32(42, offset, true);
+      cd.set(nameBytes, 46);
+      central.push(cd);
+
+      offset += local.length + data.length;
+    }
+
+    const centralBytes = concat(central);
+    const eocd = new Uint8Array(22);
+    const ev = new DataView(eocd.buffer);
+    ev.setUint32(0, 0x06054b50, true);
+    ev.setUint16(4, 0, true);
+    ev.setUint16(6, 0, true);
+    ev.setUint16(8, files.length, true);
+    ev.setUint16(10, files.length, true);
+    ev.setUint32(12, centralBytes.length, true);
+    ev.setUint32(16, offset, true);
+    ev.setUint16(20, 0, true);
+    return concat(parts.concat([centralBytes, eocd]));
+  }
+
+  /* --------------------- description → working Kotlin app ------------------- */
+  /* The description is compiled into a small, fixed app engine plus a data
+     file (AppSpec.kt). Only the data changes per description, so every
+     generated project stays compilable. */
+  function descScreens(text) {
+    const raw = String(text || '');
+    const t = raw.toLowerCase();
+    const screens = [{ type: 'home', title: 'ផ្ទះ', payload: '' }];
+    const found = [];
+    const url = raw.match(/https?:\/\/[^\s,)\]]+/i);
+    if (url) {
+      screens.push({ type: 'web', title: 'វេបសាយ', payload: url[0] });
+      found.push('វេបសាយ');
+    }
+    if (/បញ្ជី|រាយ|ទំនិញ|ស្តុក|ការងារ|កត់ត្រា|todo|list|item|shop|stock|task|note|inventory/.test(t)) {
+      screens.push({ type: 'list', title: 'បញ្ជី', payload: 'main' });
+      found.push('បញ្ជី');
+    }
+    if (/គិតលុយ|គណនា|បូក|ដក|គុណ|ចែក|calc|calculat|sum|total|invoice|price/.test(t)) {
+      screens.push({ type: 'calc', title: 'គណនា', payload: '' });
+      found.push('គណនា');
+    }
+    if (/ទំនាក់ទំនង|ឈ្មោះ|ទូរស័ព្ទ|សារ|contact|form|feedback|email|phone/.test(t)) {
+      screens.push({ type: 'form', title: 'ទំនាក់ទំនង', payload: '' });
+      found.push('ទំនាក់ទំនង');
+    }
+    if (screens.length === 1) {
+      screens.push({ type: 'list', title: 'បញ្ជី', payload: 'main' });
+      found.push('បញ្ជី');
+    }
+    while (screens.length > 5) screens.pop();
+    return { screens: screens, found: found };
+  }
+
+  function ktStr(s) {
+    return '"' + String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/[\r\n\t]+/g, ' ') + '"';
+  }
+
+  function descSpecKt(c, screens) {
+    const rows = screens.map((s) => '        arrayOf(' + ktStr(s.title) + ', ' + ktStr(s.type) + ', ' + ktStr(s.payload) + ')');
+    return [
+      'package ' + c.pkg,
+      '',
+      '/** បង្កើតដោយ AppForge — កែឈ្មោះ/ពណ៌/អេក្រង់នៅទីនេះបាន។ */',
+      'object AppSpec {',
+      '    const val TITLE = ' + ktStr(c.name),
+      '    const val BG = ' + ktStr('#0B0F14'),
+      '    const val FG = ' + ktStr('#EAF2FF'),
+      '    const val ACCENT = ' + ktStr(c.color),
+      '',
+      '    /** [ឈ្មោះបង្ហាញ, ប្រភេទ (home|list|calc|form|web), ទិន្នន័យបន្ថែម] */',
+      '    val SCREENS: Array<Array<String>> = arrayOf(',
+      rows.join(',\n'),
+      '    )',
+      '}',
+      ''
+    ].join('\n');
+  }
+
+  function descEngineKt(c) {
+    return [
+      'package ' + c.pkg,
+      '',
+      'import android.content.Intent',
+      'import android.graphics.Color',
+      'import android.net.Uri',
+      'import android.os.Bundle',
+      'import android.text.InputType',
+      'import android.view.ViewGroup',
+      'import android.webkit.WebView',
+      'import android.webkit.WebViewClient',
+      'import android.widget.ArrayAdapter',
+      'import android.widget.Button',
+      'import android.widget.EditText',
+      'import android.widget.LinearLayout',
+      'import android.widget.ListView',
+      'import android.widget.ScrollView',
+      'import android.widget.TextView',
+      'import android.widget.Toast',
+      'import androidx.appcompat.app.AppCompatActivity',
+      '',
+      'class MainActivity : AppCompatActivity() {',
+      '',
+      '    private lateinit var tabBar: LinearLayout',
+      '    private lateinit var body: LinearLayout',
+      '',
+      '    override fun onCreate(savedInstanceState: Bundle?) {',
+      '        super.onCreate(savedInstanceState)',
+      '',
+      '        val root = LinearLayout(this)',
+      '        root.orientation = LinearLayout.VERTICAL',
+      '        root.setBackgroundColor(Color.parseColor(AppSpec.BG))',
+      '',
+      '        val header = TextView(this)',
+      '        header.text = AppSpec.TITLE',
+      '        header.textSize = 20f',
+      '        header.setTextColor(Color.parseColor(AppSpec.FG))',
+      '        header.setPadding(dp(16), dp(18), dp(16), dp(10))',
+      '',
+      '        tabBar = LinearLayout(this)',
+      '        tabBar.orientation = LinearLayout.HORIZONTAL',
+      '        tabBar.setPadding(dp(10), 0, dp(10), dp(8))',
+      '',
+      '        body = LinearLayout(this)',
+      '        body.orientation = LinearLayout.VERTICAL',
+      '        body.setPadding(dp(16), dp(8), dp(16), dp(16))',
+      '',
+      '        val scroll = ScrollView(this)',
+      '        scroll.addView(body)',
+      '',
+      '        root.addView(header)',
+      '        root.addView(tabBar)',
+      '        root.addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))',
+      '        setContentView(root)',
+      '',
+      '        showScreen(0)',
+      '    }',
+      '',
+      '    private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()',
+      '',
+      '    private fun buildTabs(active: Int) {',
+      '        tabBar.removeAllViews()',
+      '        for (i in AppSpec.SCREENS.indices) {',
+      '            val tab = TextView(this)',
+      '            tab.text = AppSpec.SCREENS[i][0]',
+      '            tab.textSize = 14f',
+      '            tab.setPadding(dp(12), dp(8), dp(12), dp(8))',
+      '            tab.setTextColor(Color.parseColor(if (i == active) "#04231B" else AppSpec.FG))',
+      '            tab.setBackgroundColor(Color.parseColor(if (i == active) AppSpec.ACCENT else "#16202B"))',
+      '            val lp = LinearLayout.LayoutParams(',
+      '                ViewGroup.LayoutParams.WRAP_CONTENT,',
+      '                ViewGroup.LayoutParams.WRAP_CONTENT',
+      '            )',
+      '            lp.marginEnd = dp(6)',
+      '            tab.setOnClickListener { showScreen(i) }',
+      '            tabBar.addView(tab, lp)',
+      '        }',
+      '    }',
+      '',
+      '    private fun showScreen(index: Int) {',
+      '        buildTabs(index)',
+      '        body.removeAllViews()',
+      '        val screen = AppSpec.SCREENS[index]',
+      '        when (screen[1]) {',
+      '            "list" -> buildList(screen[2])',
+      '            "calc" -> buildCalc()',
+      '            "form" -> buildForm()',
+      '            "web" -> buildWeb(screen[2])',
+      '            else -> buildHome()',
+      '        }',
+      '    }',
+      '',
+      '    private fun titleView(text: String): TextView {',
+      '        val v = TextView(this)',
+      '        v.text = text',
+      '        v.textSize = 16f',
+      '        v.setTextColor(Color.parseColor(AppSpec.FG))',
+      '        v.setPadding(0, 0, 0, dp(10))',
+      '        return v',
+      '    }',
+      '',
+      '    private fun buildHome() {',
+      '        var taps = 0',
+      '        val counter = TextView(this)',
+      '        counter.text = "អ្នកចុច 0 ដង"',
+      '        counter.setTextColor(Color.parseColor(AppSpec.FG))',
+      '        counter.setPadding(0, dp(10), 0, dp(10))',
+      '        val button = Button(this)',
+      '        button.text = "ចុចទីនេះ"',
+      '        button.setOnClickListener {',
+      '            taps += 1',
+      '            counter.text = "អ្នកចុច " + taps + " ដង"',
+      '        }',
+      '        body.addView(titleView("សូមស្វាគមន៍មកកាន់ " + AppSpec.TITLE))',
+      '        body.addView(counter)',
+      '        body.addView(button)',
+      '    }',
+      '',
+      '    private fun buildList(key: String) {',
+      '        val items = ArrayList<String>()',
+      '        val prefs = getSharedPreferences("app", MODE_PRIVATE)',
+      '        val saved = prefs.getString("list_" + key, "") ?: ""',
+      '        if (saved.isNotEmpty()) items.addAll(saved.split("\\n"))',
+      '',
+      '        val input = EditText(this)',
+      '        input.hint = "បញ្ចូលអ្វីមួយ…"',
+      '        val addBtn = Button(this)',
+      '        addBtn.text = "បន្ថែម"',
+      '        val listView = ListView(this)',
+      '        val hint = TextView(this)',
+      '        hint.text = "ចុចឱ្យយូរលើជួរដើម្បីលុប"',
+      '        hint.textSize = 12f',
+      '        hint.setTextColor(Color.parseColor("#8FA1B8"))',
+      '        hint.setPadding(0, dp(8), 0, 0)',
+      '',
+      '        fun refresh() {',
+      '            listView.adapter = ArrayAdapter(this, android.R.layout.simple_list_item_1, items)',
+      '        }',
+      '        fun persist() {',
+      '            prefs.edit().putString("list_" + key, items.joinToString("\\n")).apply()',
+      '        }',
+      '',
+      '        refresh()',
+      '',
+      '        val row = LinearLayout(this)',
+      '        row.orientation = LinearLayout.HORIZONTAL',
+      '        row.addView(input, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))',
+      '        row.addView(addBtn)',
+      '',
+      '        addBtn.setOnClickListener {',
+      '            val text = input.text.toString().trim()',
+      '            if (text.isNotEmpty()) {',
+      '                items.add(0, text)',
+      '                input.setText("")',
+      '                refresh()',
+      '                persist()',
+      '            }',
+      '        }',
+      '',
+      '        listView.setOnItemLongClickListener { _, _, position, _ ->',
+      '            items.removeAt(position)',
+      '            refresh()',
+      '            persist()',
+      '            Toast.makeText(this, "លុបរួច", Toast.LENGTH_SHORT).show()',
+      '            true',
+      '        }',
+      '',
+      '        body.addView(titleView("បញ្ជី"))',
+      '        body.addView(row)',
+      '        body.addView(listView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(360)))',
+      '        body.addView(hint)',
+      '    }',
+      '',
+      '    private fun buildCalc() {',
+      '        val a = EditText(this)',
+      '        a.hint = "លេខទី១"',
+      '        a.inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL',
+      '        val b = EditText(this)',
+      '        b.hint = "លេខទី២"',
+      '        b.inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL',
+      '        val result = TextView(this)',
+      '        result.text = "= 0"',
+      '        result.textSize = 22f',
+      '        result.setTextColor(Color.parseColor(AppSpec.ACCENT))',
+      '        result.setPadding(0, dp(12), 0, 0)',
+      '',
+      '        fun compute(op: String) {',
+      '            val x = a.text.toString().toDoubleOrNull()',
+      '            val y = b.text.toString().toDoubleOrNull()',
+      '            if (x == null || y == null) {',
+      '                result.text = "សូមបញ្ចូលលេខទាំងពីរ"',
+      '                return',
+      '            }',
+      '            result.text = "= " + when (op) {',
+      '                "+" -> x + y',
+      '                "-" -> x - y',
+      '                "*" -> x * y',
+      '                else -> if (y == 0.0) 0.0 else x / y',
+      '            }',
+      '        }',
+      '',
+      '        val ops = LinearLayout(this)',
+      '        ops.orientation = LinearLayout.HORIZONTAL',
+      '        for (op in listOf("+", "-", "*", "/")) {',
+      '            val btn = Button(this)',
+      '            btn.text = op',
+      '            btn.setOnClickListener { compute(op) }',
+      '            ops.addView(btn)',
+      '        }',
+      '',
+      '        body.addView(titleView("គិតលុយ / គណនា"))',
+      '        body.addView(a)',
+      '        body.addView(b)',
+      '        body.addView(ops)',
+      '        body.addView(result)',
+      '    }',
+      '',
+      '    private fun buildForm() {',
+      '        val name = EditText(this)',
+      '        name.hint = "ឈ្មោះ"',
+      '        val phone = EditText(this)',
+      '        phone.hint = "លេខទូរស័ព្ទ"',
+      '        phone.inputType = InputType.TYPE_CLASS_PHONE',
+      '        val msg = EditText(this)',
+      '        msg.hint = "សារ"',
+      '        val out = TextView(this)',
+      '        out.setTextColor(Color.parseColor(AppSpec.FG))',
+      '        out.setPadding(0, dp(12), 0, 0)',
+      '',
+      '        val save = Button(this)',
+      '        save.text = "រក្សាទុក"',
+      '        save.setOnClickListener {',
+      '            getSharedPreferences("app", MODE_PRIVATE).edit()',
+      '                .putString("form_name", name.text.toString())',
+      '                .putString("form_phone", phone.text.toString())',
+      '                .putString("form_msg", msg.text.toString())',
+      '                .apply()',
+      '            out.text = "បានរក្សាទុក: " + name.text.toString()',
+      '        }',
+      '',
+      '        val send = Button(this)',
+      '        send.text = "ផ្ញើអ៊ីមែល"',
+      '        send.setOnClickListener {',
+      '            val intent = Intent(Intent.ACTION_SENDTO)',
+      '            intent.data = Uri.parse("mailto:")',
+      '            intent.putExtra(Intent.EXTRA_TEXT, msg.text.toString())',
+      '            try {',
+      '                startActivity(intent)',
+      '            } catch (e: Exception) {',
+      '                Toast.makeText(this, "មិនមាន app អ៊ីមែល", Toast.LENGTH_SHORT).show()',
+      '            }',
+      '        }',
+      '',
+      '        body.addView(titleView("ទំនាក់ទំនង"))',
+      '        body.addView(name)',
+      '        body.addView(phone)',
+      '        body.addView(msg)',
+      '        body.addView(save)',
+      '        body.addView(send)',
+      '        body.addView(out)',
+      '    }',
+      '',
+      '    private fun buildWeb(url: String) {',
+      '        val web = WebView(this)',
+      '        web.settings.javaScriptEnabled = true',
+      '        web.settings.domStorageEnabled = true',
+      '        web.webViewClient = WebViewClient()',
+      '        web.loadUrl(url)',
+      '        body.addView(titleView("វេបសាយ"))',
+      '        body.addView(web, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(480)))',
+      '    }',
+      '}',
+      ''
+    ].join('\n');
+  }
+
+  function buildDescProject(c) {
+    const parsed = descScreens(c.description);
+    const files = [];
+    const add = (path, text) => files.push({ path: path, text: text });
+    const hasInternet = parsed.screens.some((s) => s.type === 'web');
+
+    add('settings.gradle.kts', settingsGradle(c));
+    add('build.gradle.kts', rootGradle());
+    add('gradle.properties', [
+      'org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8',
+      'android.useAndroidX=true',
+      'kotlin.code.style=official',
+      'android.nonTransitiveRClass=true',
+      ''
+    ].join('\n'));
+    add('app/build.gradle.kts', appGradle(c));
+    add('app/proguard-rules.pro', '# Keep rules go here.\n');
+    add('app/src/main/AndroidManifest.xml', manifest(c, hasInternet));
+    add('app/src/main/res/values/strings.xml', stringsXml(c));
+    add('app/src/main/res/values/colors.xml', colorsXml(c));
+    add('app/src/main/res/values/themes.xml', themesXml(c));
+    if (c.dark) add('app/src/main/res/values-night/themes.xml', themesNightXml(c));
+    add('app/src/main/res/drawable/ic_launcher.xml', launcherXml(c));
+
+    const srcDir = 'app/src/main/java/' + c.pkg.split('.').join('/');
+    add(srcDir + '/MainActivity.kt', descEngineKt(c));
+    add(srcDir + '/AppSpec.kt', descSpecKt(c, parsed.screens));
+
+    add('.github/workflows/build-apk.yml', workflowYaml(c));
+    add('README.md', readme(c));
+    add('.gitignore', gitignore());
+
+    return { config: c, screens: parsed.screens, found: parsed.found, files: files };
+  }
+
+  /* ------------------------------- snippets -------------------------------- */
+
+  const SNIPPETS = [
+    {
+      id: 'toast',
+      title: 'បង្ហាញ Toast',
+      desc: 'សារខ្លីៗនៅបាតអេក្រង់',
+      code: 'Toast.makeText(this, "សូមស្វាគមន៍", Toast.LENGTH_SHORT).show()'
+    },
+    {
+      id: 'share',
+      title: 'ចែករំលែក (Share)',
+      desc: 'បញ្ជូនអត្ថបទទៅ app ផ្សេង',
+      code: [
+        'val send = Intent(Intent.ACTION_SEND).apply {',
+        '    type = "text/plain"',
+        '    putExtra(Intent.EXTRA_TEXT, "សាររបស់ខ្ញុំ")',
+        '}',
+        'startActivity(Intent.createChooser(send, "ចែករំលែកតាម"))'
+      ].join('\n')
+    },
+    {
+      id: 'http',
+      title: 'ទាញទិន្នន័យពី API',
+      desc: 'GET JSON ដោយ HttpURLConnection (គ្មាន library)',
+      code: [
+        'Thread {',
+        '    val url = URL("https://api.example.com/data")',
+        '    val json = url.openConnection().getInputStream()',
+        '        .bufferedReader().use { it.readText() }',
+        '    runOnUiThread { label.text = json }',
+        '}.start()'
+      ].join('\n')
+    },
+    {
+      id: 'dark',
+      title: 'ពិនិត្យ Dark mode',
+      desc: 'ស្គាល់ថាទូរស័ព្ទកំពុងប្រើ theme ងងឹត',
+      code: [
+        'val night = resources.configuration.uiMode and',
+        '    Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES'
+      ].join('\n')
+    },
+    {
+      id: 'permission',
+      title: 'សុំ Permission',
+      desc: 'ឧ. កាមេរ៉ា (ត្រូវប្រកាសក្នុង Manifest ដែរ)',
+      code: [
+        'ActivityCompat.requestPermissions(',
+        '    this,',
+        '    arrayOf(Manifest.permission.CAMERA),',
+        '    100',
+        ')'
+      ].join('\n')
+    },
+    {
+      id: 'notify',
+      title: 'ផ្ញើ Notification',
+      desc: 'បង្ហាញការជូនដំណឹង (ត្រូវសុំ POST_NOTIFICATIONS លើ Android 13+)',
+      code: [
+        'val nm = getSystemService(NotificationManager::class.java)',
+        'val channel = NotificationChannel("main", "Main", NotificationManager.IMPORTANCE_DEFAULT)',
+        'nm.createNotificationChannel(channel)',
+        'nm.notify(1, Notification.Builder(this, "main")',
+        '    .setSmallIcon(android.R.drawable.ic_dialog_info)',
+        '    .setContentTitle("AppForge")',
+        '    .setContentText("សូសារថ្មី")',
+        '    .build())'
+      ].join('\n')
+    }
+  ];
+
+  return {
+    TEMPLATES: TEMPLATES,
+    SNIPPETS: SNIPPETS,
+    normalize: normalize,
+    parseDescription: descScreens,
+    build: build,
+    zip: zip
+  };
+});

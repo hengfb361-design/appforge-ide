@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="km">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AppForge — បង្កើត App (APK) ដោយមិនសរសេរកូដ</title>
+<meta name="description" content="បង្កើត Android App ពេញលេញ + Build APK ដោយស្វ័យប្រវត្តិតាម GitHub Actions" />
+<link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span class="logo">⚡</span><b>AppForge</b></div>
+  <nav class="tabs">
+    <button class="tab active" data-view="builder">🏗️ បង្កើត App</button>
+    <button class="tab" data-view="snippets">🧩 Code</button>
+    <button class="tab" data-view="how">❓ របៀប</button>
+  </nav>
+</header>
+
+<main>
+  <!-- ------------------------------- builder ------------------------------- -->
+  <section id="view-builder" class="view active">
+    <div class="hero">
+      <h1>បង្កើត App Android ក្នុង ១ នាទី</h1>
+      <p>បំពេញព័ត៌មានខាងក្រោម → ទាញយក ZIP → ដាក់លើ GitHub → បាន <b>APK</b> ពី Actions ដោយឥតគិតថ្លៃ។</p>
+    </div>
+
+    <div class="grid">
+      <div class="card form">
+        <h2>១. ព័ត៌មាន App</h2>
+
+        <label>ឈ្មោះ App
+          <input id="name" type="text" placeholder="ឧ. ហាងខ្ញុំ" maxlength="40" />
+        </label>
+
+        <label>Package name (ឈ្មោះមិនផ្លាស់ប្តូរ)
+          <input id="pkg" type="text" placeholder="com.example.myapp" />
+        </label>
+
+        <div class="row">
+          <label>Version
+            <input id="versionName" type="text" value="1.0" maxlength="20" />
+          </label>
+          <label>Build
+            <input id="versionCode" type="number" value="1" min="1" step="1" />
+          </label>
+        </div>
+
+        <h2>២. ប្រភេទ App</h2>
+        <div id="templates" class="templates"></div>
+
+        <label class="url-wrap" id="urlWrap">URL វេបសាយ (សម្រាប់ WebView)
+          <input id="url" type="url" placeholder="https://buffy-ai.onrender.com" />
+        </label>
+
+        <label class="desc-wrap" id="descWrap" hidden>ការពិពណ៌នា App (developer សរសេរ)
+          <textarea id="description" rows="6" placeholder="ឧ. ខ្ញុំចង់បាន app សម្រាប់ហាងលក់ទំនិញ មានបញ្ជីទំនិញ បន្ថែម/លុបបាន និងម៉ាស៊ីនគិតលុយសម្រាប់គិតតម្លៃ"></textarea>
+          <small class="mini">សរសេរជាភាសាខ្មែរ ឬ English។ បើដាក់ URL វាបន្ថែមអេក្រង់វេបសាយ។</small>
+        </label>
+
+        <h2>៣. ពណ៌ និងលក្ខណៈ</h2>
+        <div class="row color-row">
+          <label>ពណ៌ម៉ាក
+            <input id="color" type="color" value="#12B886" />
+          </label>
+          <div class="swatches" id="swatches">
+            <button data-color="#12B886" style="--c:#12B886"></button>
+            <button data-color="#4C6EF5" style="--c:#4C6EF5"></button>
+            <button data-color="#F76707" style="--c:#F76707"></button>
+            <button data-color="#E64980" style="--c:#E64980"></button>
+            <button data-color="#7048E8" style="--c:#7048E8"></button>
+          </div>
+        </div>
+
+        <div class="toggles">
+          <label class="chk"><input id="tJs" type="checkbox" checked /> បើក JavaScript</label>
+          <label class="chk"><input id="tBack" type="checkbox" checked /> ប៊ូតុងថយក្រោយ</label>
+          <label class="chk"><input id="tPull" type="checkbox" /> អូសដើម្បី Refresh</label>
+          <label class="chk"><input id="tExternal" type="checkbox" /> តំណខាងក្រៅបើក Browser</label>
+          <label class="chk"><input id="tDark" type="checkbox" checked /> គាំទ្រ Dark mode</label>
+        </div>
+
+        <div class="actions">
+          <button id="genBtn" class="primary">⚡ បង្កើត Project</button>
+          <button id="zipBtn" class="ghost" disabled>⬇️ ទាញយក ZIP</button>
+        </div>
+        <p class="hint" id="hint">គ្មាន API key គ្មាន server — កូដបង្កើតនៅក្នុង browser របស់អ្នក។</p>
+      </div>
+
+      <div class="card preview">
+        <h2>មើលជាមុន</h2>
+        <div class="phone">
+          <div class="notch"></div>
+          <div class="screen" id="screen">
+            <div class="app-bar" id="appBar">
+              <span id="barTitle">My App</span>
+            </div>
+            <div class="screen-body" id="screenBody"></div>
+          </div>
+        </div>
+        <div class="summary" id="summary">បំពេញឈ្មោះ App ដើម្បីចាប់ផ្តើម</div>
+      </div>
+    </div>
+
+    <div class="card files" id="filesCard" hidden>
+      <div class="files-head">
+        <h2>ឯកសារដែលបានបង្កើត <span id="fileCount" class="pill"></span></h2>
+        <button id="copyAll" class="ghost small">⧉ ចម្លងកូដឯកសារនេះ</button>
+      </div>
+      <div class="files-body">
+        <ul id="fileTree" class="tree"></ul>
+        <pre class="code"><code id="fileCode">—</code></pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- ------------------------------- snippets ------------------------------ -->
+  <section id="view-snippets" class="view">
+    <div class="hero">
+      <h1>បំណែកកូដ Kotlin</h1>
+      <p>ចម្លងទៅដាក់ក្នុង <code>MainActivity.kt</code> របស់អ្នក។</p>
+    </div>
+    <div class="grid snippets" id="snippetList"></div>
+  </section>
+
+  <!-- --------------------------------- how --------------------------------- -->
+  <section id="view-how" class="view">
+    <div class="hero">
+      <h1>របៀបបាន APK ពិត</h1>
+      <p>AppForge បង្កើត <b>project Android ពេញលេញ</b>។ ការបង្គំ APK ត្រូវការ Java + Android SDK ដែលរត់លើ GitHub Actions (ឥតគិតថ្លៃ)។</p>
+    </div>
+    <ol class="steps">
+      <li><b>បង្កើត repo</b> ថ្មីនៅ github.com (Public ឬ Private)។</li>
+      <li><b>Upload</b> ឯកសារទាំងអស់ក្នុង ZIP ទៅ root របស់ repo — ត្រូវឃើញ <code>settings.gradle.kts</code> និងថត <code>.github/</code>។</li>
+      <li>ចូល <b>Actions</b> → <i>Build APK</i> → រង់ចាំ ~២–៤ នាទី។</li>
+      <li>ចុច run ពណ៌បៃតង → <b>Artifacts</b> → ទាញយក <code>*-apk.zip</code> → ពន្លាតបាន <code>app-debug.apk</code>។</li>
+      <li>ផ្ញើ APK ទៅទូរស័ព្ទ → ដំឡើង (បើក “Install unknown apps”)។</li>
+    </ol>
+    <div class="card note">
+      <h2>សំណួរញឹកញាប់</h2>
+      <p><b>ហេតុអ្វីមិនបង្កើត APK នៅទីនេះផ្ទាល់?</b> ការបង្គំ APK ត្រូវការ Android SDK + Gradle + JDK (~១GB) ដែល website ស្ថិតលើ Cloudflare Worker មិនអាចរត់បាន។ GitHub Actions ធ្វើការនេះជំនួស ហើយឥតគិតថ្លៃសម្រាប់ repo ធម្មតា។</p>
+      <p><b>ដាក់លើ Play Store បានទេ?</b> APK នេះជា <i>debug</i>។ ដាក់លើ Play Store ត្រូវការ release keystore + ឯកសារ AAB (អាចបន្ថែមក្រោយ)។</p>
+      <p><b>កូដជារបស់ខ្ញុំទេ?</b> បាទ — ទាំងអស់រត់ក្នុង browser គ្មានអ្វីផ្ញើទៅ server ទេ។</p>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <span>AppForge · បង្កើត App ក្នុង browser · គ្មាន tracking</span>
+</footer>
+
+<script src="./gen.js"></script>
+<script src="./app.js"></script>
+</body>
+</html>

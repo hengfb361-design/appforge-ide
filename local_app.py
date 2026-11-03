@@ -314,7 +314,7 @@ def _workflow(prompt: str, negative: str, width: int, height: int, seed: int,
 # website finds the GPU server on its own. In memory only: re-running the
 # one-line script simply registers a new URL.
 _REMOTE = {"url": "", "ts": 0.0}
-_PROBE = {"ts": 0.0, "ok": False}
+_PROBE = {"ts": 0.0, "ok": False, "caps": {}}
 _REMOTE_LOCK = threading.Lock()
 TUNNEL_TOKEN = os.environ.get("TUNNEL_TOKEN", "").strip()
 PROBE_TTL = 10.0
@@ -325,22 +325,36 @@ def remote_url() -> str:
         return _REMOTE["url"]
 
 
-def remote_alive() -> bool:
-    """Cheap liveness probe, cached for PROBE_TTL seconds."""
+def remote_probe() -> dict:
+    """Cached /api/health of the GPU server: {"alive": bool, "video": "on"}.
+
+    The Render side has no ComfyUI of its own, so the browser cannot tell from a
+    local check whether the far end has the video model. Cache its answer here.
+    """
     url = remote_url()
     if not url:
-        return False
+        return {"alive": False}
     now = time.time()
     with _REMOTE_LOCK:
         if now - _PROBE["ts"] < PROBE_TTL:
-            return _PROBE["ok"]
+            return dict(_PROBE["caps"])
+    caps = {"alive": False}
     try:
-        ok = requests.get(url + "/api/health", timeout=4).ok
+        r = requests.get(url + "/api/health", timeout=4)
+        if r.ok:
+            body = r.json() or {}
+            caps = {"alive": True, "video": body.get("video", ""),
+                    "image": body.get("image", "")}
     except Exception:  # noqa: BLE001
-        ok = False
+        pass
     with _REMOTE_LOCK:
-        _PROBE.update(ts=now, ok=ok)
-    return ok
+        _PROBE.update(ts=now, ok=bool(caps.get("alive")), caps=caps)
+    return caps
+
+
+def remote_alive() -> bool:
+    """Cheap liveness probe, cached for PROBE_TTL seconds."""
+    return bool(remote_probe().get("alive"))
 
 
 def image_ready() -> bool:
@@ -812,7 +826,7 @@ def register(payload: dict):
     with _REMOTE_LOCK:
         _REMOTE["url"] = url
         _REMOTE["ts"] = time.time()
-        _PROBE.update(ts=0.0, ok=False)
+        _PROBE.update(ts=0.0, ok=False, caps={})
     return {"ok": True, "url": url}
 
 
@@ -980,6 +994,7 @@ def health(request: Request):
                 model_name = data[0].get("id", "")
         except Exception:
             pass
+    caps = remote_probe()
     return {
         "ok": True,
         "app": "Buffy AI",
@@ -989,12 +1004,16 @@ def health(request: Request):
         "key_set": bool(API_KEY),
         "access_key_required": bool(ACCESS_KEY),
         "web_search": "exa" if EXA_API_KEY else "off",
-        "image": "remote" if remote_alive() else ("comfyui" if image_ready() else "off"),
-        "video": "on" if VIDEO_MODEL else "off",
-        "remote": {"url": remote_url(), "alive": remote_alive()},
+        "image": "remote" if caps.get("alive") else ("comfyui" if image_ready() else "off"),
+        "video": "on" if (VIDEO_MODEL or caps.get("video") == "on") else "off",
+        "video_remote": caps.get("video") == "on",
+        "remote": {"url": remote_url(), "alive": bool(caps.get("alive"))},
     }
 
 
 @app.get("/", response_class=HTMLResponse)
 def index():
-    return HTMLResponse(PAGE)
+    # no-store: a phone that cached the old page kept showing a UI with no 🎬
+    # button, so the new build looked broken until a hard refresh.
+    return HTMLResponse(PAGE, headers={"Cache-Control": "no-store, max-age=0",
+                                       "Pragma": "no-cache"})

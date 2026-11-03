@@ -213,6 +213,12 @@ PAGE = r"""<!doctype html>
   .send.gen{background:var(--accent-2);color:#fff}
   .send.stop{background:#c0392b;color:#fff}
   .hint{max-width:820px;margin:8px auto 0;text-align:center;font-size:11px;color:#6f7580}
+  .last-video{
+    display:block;margin:8px auto 0;padding:7px 15px;border-radius:999px;cursor:pointer;
+    border:1px solid #3f8f79;background:rgba(63,143,121,.16);color:#8fe0c8;font-size:12.5px;font-weight:600;
+  }
+  .last-video:hover:not(:disabled){background:rgba(63,143,121,.28);color:#d3f8ec}
+  .last-video:disabled{opacity:.45;cursor:not-allowed}
 
   @media (max-width:820px){
     #menuBtn{display:grid}
@@ -299,6 +305,7 @@ PAGE = r"""<!doctype html>
           <textarea id="input" rows="1" placeholder="ពិពណ៌នារូបភាពដែលអ្នកចង់បាន… (Enter ដើម្បីផ្ញើ)"></textarea>
           <button class="send" id="sendBtn" title="ផ្ញើ">➤</button>
         </div>
+        <button class="last-video" id="lastVideo" hidden>🎬 ធ្វើវីដេអូពីរូបចុងក្រោយ</button>
         <div class="hint">រូបភាពបង្កើតដោយ AI · រូបដំបូងយូរ ព្រោះត្រូវ load model</div>
       </div>
     </div>
@@ -327,6 +334,7 @@ PAGE = r"""<!doctype html>
   const videoLong = $("#videoLong");
   const topTitle = $("#topTitle");
   const connStatusEl = $("#connStatus");
+  const lastVideoBtn = $("#lastVideo");
   const STORE = "buffy-ai-chat-v2";
 
   const state = { messages: [], attachments: [], busy: false, controller: null };
@@ -375,7 +383,8 @@ PAGE = r"""<!doctype html>
       const d = await res.json();
       const r = d.remote || {};
       if (r.alive) {
-        setConn("ភ្ជាប់ស្វ័យប្រវត្តិ · server GPU ដំណើរការ", "ok");
+        setConn(d.video === "on" ? "ភ្ជាប់ស្វ័យប្រវត្តិ · 🎬 វីដេអូ រួចរាល់"
+                                 : "ភ្ជាប់ស្វ័យប្រវត្តិ · 🎬 ត្រូវ restart GPU", "ok");
       } else if (r.url) {
         setConn("បានចុះทะเบียน តែ server មិនឆ្លើយ — ពិនិត្យ Kaggle", "bad");
       } else if (d.image === "comfyui") {
@@ -466,7 +475,24 @@ PAGE = r"""<!doctype html>
     if (copyBtn) copyBtn.onclick = () => navigator.clipboard.writeText(m.text || "");
     const vidBtn = cfg.querySelector('[data-act="video"]');
     if (vidBtn) vidBtn.onclick = () => startVideo(m);
+    syncLastVideo();
   }
+
+  /* Keeps the 🎬 button under the composer in step with the thread: it targets
+     the newest picture that does not have a clip yet, so the feature is visible
+     even when the picture was generated before this page was loaded. */
+  function syncLastVideo() {
+    if (!lastVideoBtn) return;
+    const todo = [...state.messages].reverse().find((m) => m.img && m.img.url && !m.video);
+    lastVideoBtn.hidden = !todo;
+    lastVideoBtn.disabled = state.busy;
+  }
+
+  if (lastVideoBtn) lastVideoBtn.onclick = () => {
+    if (state.busy) return;
+    const target = [...state.messages].reverse().find((m) => m.img && m.img.url && !m.video);
+    if (target) startVideo(target);
+  };
 
   function setStatus(node, text) {
     const st = node.querySelector(".status");
@@ -568,6 +594,7 @@ PAGE = r"""<!doctype html>
     sendBtn.classList.toggle("stop", on);
     sendBtn.textContent = on ? "■" : "➤";
     box.classList.toggle("gen", imageMode.checked && !on);
+    syncLastVideo();
   }
 
   function historyPayload() {

@@ -99,6 +99,7 @@
           </div>
         </div>
         <div class="summary" id="summary">បំពេញឈ្មោះ App ដើម្បីចាប់ផ្តើម</div>
+        <div class="verify" id="verify"></div>
       </div>
     </div>
 
@@ -112,6 +113,27 @@
         <pre class="code"><code id="fileCode">—</code></pre>
       </div>
     </div>
+  </section>
+
+  <!-- ---------------------------- auto apk build ---------------------------- -->
+  <section class="card auto" id="autoCard" hidden>
+    <h2>🚀 បង្កើត APK ដោយស្វ័យប្រវត្តិ</h2>
+    <p class="hint">Server បង្កើត GitHub repo ឲ្យ, push កូដ, រត់ GitHub Actions និងបញ្ជូន APK មកវិញ — អ្នកមិនត្រូវធ្វើអ្វីដោយដៃទេ។</p>
+    <div class="row">
+      <label>ឈ្មោះ repo
+        <input id="repoName" type="text" placeholder="my-app" />
+      </label>
+      <label>ឯកជន
+        <select id="repoPrivate">
+          <option value="0">Public (ឥតគិតថ្លៃ)</option>
+          <option value="1">Private</option>
+        </select>
+      </label>
+    </div>
+    <div class="actions">
+      <button id="autoBuild" class="primary">🚀 បង្កើត APK</button>
+    </div>
+    <p class="build-status" id="buildStatus">រង់ចាំ…</p>
   </section>
 
   <!-- ------------------------------- snippets ------------------------------ -->

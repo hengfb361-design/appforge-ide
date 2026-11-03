@@ -1153,6 +1153,87 @@
     return { config: c, screens: parsed.screens, found: parsed.found, files: files };
   }
 
+  /* ------------------------------- self-check ------------------------------- */
+  /* Runs the same structural checks a build would fail on, so the page can say
+     whether what it just generated is actually sound instead of hoping. */
+  function xmlIssue(text) {
+    const stack = [];
+    const re = /<\/?([A-Za-z_][\w.:-]*)((?:[^>"']|"[^"]*"|'[^']*')*?)(\/?)>/g;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      const whole = m[0];
+      const name = m[1];
+      if (whole.startsWith('<?') || whole.startsWith('<!')) continue;
+      if (whole.startsWith('</')) {
+        const open = stack.pop();
+        if (open !== name) return 'unexpected </' + name + '>';
+      } else if (m[3] !== '/') {
+        stack.push(name);
+      }
+    }
+    return stack.length ? 'unclosed <' + stack[stack.length - 1] + '>' : '';
+  }
+
+  function verify(result) {
+    const issues = [];
+    const files = (result && result.files) || [];
+    const cfg = (result && result.config) || {};
+    if (!files.length) return { ok: false, issues: ['មិនមានឯកសារ'] };
+    const map = {};
+    files.forEach((f) => { map[f.path] = f.text; });
+
+    const required = [
+      'settings.gradle.kts', 'build.gradle.kts', 'app/build.gradle.kts',
+      'app/src/main/AndroidManifest.xml', 'app/src/main/res/values/strings.xml',
+      '.github/workflows/build-apk.yml', 'README.md'
+    ];
+    required.forEach((p) => { if (!map[p]) issues.push('ខ្វះ ' + p); });
+
+    if (!files.some((f) => f.path.endsWith('MainActivity.kt'))) issues.push('ខ្វះ MainActivity.kt');
+
+    const gradle = map['app/build.gradle.kts'] || '';
+    if (cfg.pkg && !gradle.includes('applicationId = "' + cfg.pkg + '"')) issues.push('applicationId មិនត្រូវនឹង package');
+    if (cfg.pkg && !gradle.includes('namespace = "' + cfg.pkg + '"')) issues.push('namespace មិនត្រូវនឹង package');
+    if (!gradle.includes('versionCode = ')) issues.push('ខ្វះ versionCode');
+    if (!gradle.includes('compileSdk = 34')) issues.push('compileSdk មិនមែន 34');
+
+    files.forEach((f) => {
+      if (!f.text || !f.text.trim()) issues.push('ឯកសារទទេ: ' + f.path);
+      if (f.path.endsWith('.kt')) {
+        if (cfg.pkg && !f.text.includes('package ' + cfg.pkg)) issues.push('package ខុស: ' + f.path);
+        const pairs = [['{', '}'], ['(', ')']];
+        pairs.forEach(([o, c]) => {
+          if (f.text.split(o).length !== f.text.split(c).length) issues.push('សញ្ញា ' + o + c + ' មិនតុល្យភាព: ' + f.path);
+        });
+      }
+      if (f.path.endsWith('.xml')) {
+        const bad = xmlIssue(f.text);
+        if (bad) issues.push(f.path + ': ' + bad);
+      }
+    });
+
+    const theme = 'Theme.' + pascal(cfg.name || 'My App');
+    const manifest = map['app/src/main/AndroidManifest.xml'] || '';
+    const themes = map['app/src/main/res/values/themes.xml'] || '';
+    if (manifest.includes('@style/' + theme) && !themes.includes('name="' + theme + '"')) {
+      issues.push('theme ' + theme + ' មិនមានក្នុង themes.xml');
+    }
+
+    const wf = map['.github/workflows/build-apk.yml'] || '';
+    if (!wf.includes('assembleDebug')) issues.push('workflow: ខ្វះ assembleDebug');
+    if (!wf.includes('upload-artifact')) issues.push('workflow: ខ្វះ upload-artifact');
+    if (!wf.includes('java-version')) issues.push('workflow: ខ្វះ JDK');
+
+    if (cfg.template === 'webview' && !manifest.includes('android.permission.INTERNET')) {
+      issues.push('ខ្វះ INTERNET permission');
+    }
+    if (cfg.template === 'webview' && cfg.pull && !map['app/src/main/res/layout/activity_main.xml']) {
+      issues.push('Refresh បើកតែគ្មាន layout');
+    }
+
+    return { ok: issues.length === 0, issues: issues };
+  }
+
   /* ------------------------------- snippets -------------------------------- */
 
   const SNIPPETS = [
@@ -1230,6 +1311,7 @@
     SNIPPETS: SNIPPETS,
     normalize: normalize,
     parseDescription: descScreens,
+    verify: verify,
     build: build,
     zip: zip
   };

@@ -267,4 +267,24 @@ button.small { padding: 7px 12px; font-size: 12.5px; }
 .note p { color: var(--muted); margin: 0 0 10px; }
 .note b { color: var(--text); }
 
+select {
+  width: 100%;
+  margin-top: 5px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: #0a1017;
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+}
+.verify { margin-top: 10px; font-size: 12.5px; text-align: center; }
+.verify .ok { color: #6ff0c8; }
+.verify .bad { color: #ff8a8a; text-align: left; }
+.verify ul { margin: 6px 0 0; padding-left: 18px; }
+.verify li { margin-bottom: 3px; }
+.auto { margin-top: 18px; max-width: 720px; }
+.build-status { font-size: 13px; color: var(--muted); margin: 12px 0 0; min-height: 20px; }
+.build-status a { color: #7fb2ff; }
+
 footer { padding: 18px; text-align: center; color: #5b6b7e; font-size: 12px; border-top: 1px solid var(--border); }

@@ -29,17 +29,19 @@ the server, so the public page never receives it.
 
 import base64
 import hmac
+import io
 import json
 import os
 import threading
 import time
 import traceback
+import zipfile
 from urllib.parse import quote_plus, urlparse
 
 import requests
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse, Response
 from pydantic import BaseModel
 from typing import List
 
@@ -1019,6 +1021,226 @@ def health(request: Request):
         "video_remote": caps.get("video") == "on",
         "remote": {"url": remote_url(), "alive": bool(caps.get("alive"))},
     }
+
+
+# ---------------------------------------------------------------------------
+# AppForge — one-click APK builds
+# ---------------------------------------------------------------------------
+# The browser builds the project files; this server only needs a GitHub token
+# to create the repo, push them and hand the finished APK back. The token is
+# read from the environment and never reaches the browser.
+_AF_TOKEN = (os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+             or os.environ.get("GITHUB_API") or os.environ.get("GITHUB_API_KEY")
+             or "").strip()
+_AF_API = "https://api.github.com"
+_AF_HITS = {}
+_AF_LOCK = threading.Lock()
+_AF_MAX_FILES = 80
+_AF_MAX_BYTES = 900_000
+
+
+def _gh(method: str, path: str, payload=None):
+    """Call the GitHub REST API with the server-side token."""
+    return requests.request(
+        method, _AF_API + path, json=payload, timeout=45,
+        headers={
+            "Authorization": "Bearer " + _AF_TOKEN,
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "AppForge/1.0",
+        },
+    )
+
+
+def _af_slug(repo: str) -> str:
+    """Accept only owner/name, so the token cannot be pointed elsewhere."""
+    parts = (repo or "").strip().split("/")
+    if len(parts) != 2:
+        return ""
+    allowed = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._"
+    for part in parts:
+        if not part or len(part) > 100 or any(ch not in allowed for ch in part):
+            return ""
+    return parts[0] + "/" + parts[1]
+
+
+def _af_safe_name(raw) -> str:
+    name = "".join(ch if (ch.isalnum() or ch in "-._") else "-" for ch in str(raw or "").strip())
+    return name.strip("-._")[:60] or "appforge-app"
+
+
+def _af_rate_ok(ip: str) -> bool:
+    now = time.time()
+    with _AF_LOCK:
+        hits = [t for t in _AF_HITS.get(ip, []) if now - t < 600]
+        if len(hits) >= 3:
+            _AF_HITS[ip] = hits
+            return False
+        hits.append(now)
+        _AF_HITS[ip] = hits
+    return True
+
+
+def _af_files(payload) -> list:
+    files = payload.get("files") if isinstance(payload, dict) else None
+    if not isinstance(files, list) or not files or len(files) > _AF_MAX_FILES:
+        raise ValueError("បញ្ជីឯកសារមិនត្រឹមត្រូវ")
+    out, total = [], 0
+    for item in files:
+        if not isinstance(item, dict):
+            raise ValueError("ឯកសារមិនត្រឹមត្រូវ")
+        path = str(item.get("path") or "").strip().lstrip("/")
+        text = item.get("text")
+        if (not path or ".." in path or "\\" in path or len(path) > 200
+                or not isinstance(text, str)):
+            raise ValueError("ឯកសារមិនត្រឹមត្រូវ: " + str(item.get("path"))[:60])
+        total += len(text.encode("utf-8"))
+        if total > _AF_MAX_BYTES:
+            raise ValueError("ឯកសារធំពេក")
+        out.append((path, text))
+    return out
+
+
+@app.get("/api/appforge/ready")
+def appforge_ready():
+    """Lets the page hide the button instead of failing on click."""
+    return {"ok": True, "github": bool(_AF_TOKEN)}
+
+
+@app.post("/api/appforge/build")
+async def appforge_build(request: Request):
+    if not _AF_TOKEN:
+        return JSONResponse(
+            {"detail": "Server មិនមាន GITHUB_TOKEN — បន្ថែមនៅ Render → Environment រួច deploy ម្តងទៀត។"},
+            status_code=503,
+        )
+    ip = (request.client.host if request.client else "?") or "?"
+    if not _af_rate_ok(ip):
+        return JSONResponse(
+            {"detail": "ច្រើនពេក — សូមរង់ចាំ ១០ នាទី ឬប្រើ ZIP ដោយដៃ។"},
+            status_code=429,
+        )
+    try:
+        payload = await request.json()
+    except Exception:
+        return JSONResponse({"detail": "JSON មិនត្រឹមត្រូវ"}, status_code=400)
+    try:
+        files = _af_files(payload)
+    except ValueError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=400)
+
+    name = _af_safe_name((payload or {}).get("repo"))
+    try:
+        me = _gh("GET", "/user")
+        if me.status_code != 200:
+            return JSONResponse({"detail": "GitHub token មិនត្រឹមត្រូវ ឬផុតកំណត់"}, status_code=502)
+        owner = (me.json() or {}).get("login") or ""
+        created = _gh("POST", "/user/repos", {
+            "name": name,
+            "private": bool(payload.get("private")),
+            "auto_init": True,
+            "description": "បង្កើតដោយ AppForge",
+        })
+        if created.status_code not in (201, 422):
+            return JSONResponse(
+                {"detail": "បង្កើត repo មិនបាន (GitHub %s)" % created.status_code},
+                status_code=502,
+            )
+        full = owner + "/" + name
+        for path, text in files:
+            put = _gh("PUT", "/repos/%s/contents/%s" % (full, path), {
+                "message": "Add " + path,
+                "content": base64.b64encode(text.encode("utf-8")).decode("ascii"),
+                "branch": "main",
+            })
+            if put.status_code not in (200, 201):
+                return JSONResponse(
+                    {"detail": "push %s មិនបាន (GitHub %s)" % (path, put.status_code)},
+                    status_code=502,
+                )
+        html_url = (created.json() or {}).get("html_url") or ("https://github.com/" + full)
+        return {"ok": True, "repo": full, "url": html_url, "files": len(files)}
+    except requests.RequestException as exc:
+        return JSONResponse({"detail": "ភ្ជាប់ GitHub មិនបាន: %s" % str(exc)[:120]}, status_code=502)
+
+
+@app.get("/api/appforge/status")
+def appforge_status(repo: str = ""):
+    if not _AF_TOKEN:
+        return JSONResponse({"detail": "Server មិនមាន GITHUB_TOKEN"}, status_code=503)
+    full = _af_slug(repo)
+    if not full:
+        return JSONResponse({"detail": "repo មិនត្រឹមត្រូវ"}, status_code=400)
+    try:
+        runs = _gh("GET", "/repos/%s/actions/runs?per_page=1" % full)
+        if runs.status_code != 200:
+            return JSONResponse({"state": "unknown", "detail": "GitHub %s" % runs.status_code},
+                                status_code=502)
+        items = (runs.json() or {}).get("workflow_runs") or []
+        if not items:
+            return {"state": "starting", "repo": full, "run_url": ""}
+        run = items[0]
+        status = run.get("status") or ""
+        conclusion = run.get("conclusion") or ""
+        if status in ("queued", "in_progress", "waiting", "requested"):
+            state = "running"
+        elif conclusion == "success":
+            state = "done"
+        elif conclusion:
+            state = "failed"
+        else:
+            state = "running"
+        apk_ready = False
+        if state == "done":
+            arts = _gh("GET", "/repos/%s/actions/runs/%s/artifacts" % (full, run.get("id")))
+            if arts.status_code == 200:
+                apk_ready = bool((arts.json() or {}).get("artifacts"))
+        return {
+            "state": state, "status": status, "conclusion": conclusion,
+            "run_url": run.get("html_url") or "", "apk_ready": apk_ready, "repo": full,
+        }
+    except requests.RequestException as exc:
+        return JSONResponse({"state": "unknown", "detail": str(exc)[:120]}, status_code=502)
+
+
+@app.get("/api/appforge/apk")
+def appforge_apk(repo: str = ""):
+    """Streams the APK from the newest successful Actions run."""
+    if not _AF_TOKEN:
+        return JSONResponse({"detail": "Server មិនមាន GITHUB_TOKEN"}, status_code=503)
+    full = _af_slug(repo)
+    if not full:
+        return JSONResponse({"detail": "repo មិនត្រឹមត្រូវ"}, status_code=400)
+    try:
+        runs = _gh("GET", "/repos/%s/actions/runs?per_page=5" % full)
+        items = ((runs.json() or {}).get("workflow_runs") or []) if runs.status_code == 200 else []
+        run = next((r for r in items if r.get("conclusion") == "success"), None)
+        if not run:
+            return JSONResponse({"detail": "មិនទាន់មាន APK — build មិនទាន់ជោគជ័យ"}, status_code=409)
+        arts = _gh("GET", "/repos/%s/actions/runs/%s/artifacts" % (full, run.get("id")))
+        art_list = ((arts.json() or {}).get("artifacts") or []) if arts.status_code == 200 else []
+        if not art_list:
+            return JSONResponse({"detail": "គ្មាន artifact"}, status_code=409)
+        archive = requests.get(
+            art_list[0].get("archive_download_url"),
+            headers={"Authorization": "Bearer " + _AF_TOKEN, "User-Agent": "AppForge/1.0"},
+            timeout=120, allow_redirects=True,
+        )
+        if archive.status_code != 200:
+            return JSONResponse(
+                {"detail": "ទាញយក APK មិនបាន (GitHub %s)" % archive.status_code}, status_code=502)
+        bundle = zipfile.ZipFile(io.BytesIO(archive.content))
+        target = next((n for n in bundle.namelist() if n.endswith(".apk")), "")
+        if not target:
+            return JSONResponse({"detail": "ក្នុង artifact គ្មាន .apk"}, status_code=404)
+        return Response(
+            content=bundle.read(target),
+            media_type="application/vnd.android.package-archive",
+            headers={"Content-Disposition": 'attachment; filename="app-debug.apk"',
+                     "Cache-Control": "no-store"},
+        )
+    except (requests.RequestException, zipfile.BadZipFile) as exc:
+        return JSONResponse({"detail": "បរាជ័យ: %s" % str(exc)[:120]}, status_code=502)
 
 
 @app.get("/", response_class=HTMLResponse)

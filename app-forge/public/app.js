@@ -34,10 +34,17 @@
     barTitle: $('#barTitle'),
     screenBody: $('#screenBody'),
     summary: $('#summary'),
-    snippetList: $('#snippetList')
+    snippetList: $('#snippetList'),
+    verify: $('#verify'),
+    autoCard: $('#autoCard'),
+    repoName: $('#repoName'),
+    repoPrivate: $('#repoPrivate'),
+    autoBuild: $('#autoBuild'),
+    buildStatus: $('#buildStatus')
   };
 
-  const state = { template: 'webview', result: null, activeFile: 0, zipUrl: null };
+  const state = { template: 'webview', result: null, activeFile: 0, zipUrl: null,
+    auto: { repo: '', busy: false, timer: null } };
   const STORE = 'appforge.v1';
 
   /* ------------------------------- templates ------------------------------- */
@@ -134,6 +141,7 @@
     el.zipBtn.disabled = false;
     el.filesCard.hidden = false;
     renderSummary(result);
+    renderVerify(result);
     renderPreview(result);
     renderTree(result);
     renderCode(0);
@@ -153,6 +161,103 @@
     }
     el.summary.innerHTML = html;
   }
+
+  /* ---------------------------- self-check + APK ---------------------------- */
+  function renderVerify(result) {
+    const check = G.verify(result);
+    if (el.verify) {
+      el.verify.innerHTML = check.ok
+        ? '<span class="ok">✅ Self-check ជាប់ · ០ បញ្ហា</span>'
+        : '<div class="bad"><b>⚠️ Self-check ឃើញ ' + check.issues.length + ' បញ្ហា</b><ul>' +
+          check.issues.slice(0, 8).map((i) => '<li>' + esc(i) + '</li>').join('') + '</ul></div>';
+    }
+    el.zipBtn.disabled = !check.ok;
+    el.autoBuild.disabled = !check.ok || state.auto.busy;
+    return check;
+  }
+
+  function setBuild(html) {
+    if (el.buildStatus) el.buildStatus.innerHTML = html;
+  }
+
+  function repoSlug() {
+    const raw = (el.repoName.value || '').trim();
+    const base = raw || (state.result ? state.result.config.pkg.split('.').pop() : 'app');
+    return base.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'app';
+  }
+
+  function autoBuild() {
+    if (!state.result || state.auto.busy) return;
+    state.auto.busy = true;
+    el.autoBuild.disabled = true;
+    setBuild('🚀 កំពុងបង្កើត repo នៅ GitHub…');
+    const body = {
+      repo: repoSlug(),
+      private: el.repoPrivate.value === '1',
+      files: state.result.files.map((f) => ({ path: f.path, text: f.text }))
+    };
+    fetch('/api/appforge/build', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    })
+      .then((res) => res.json().catch(() => ({})).then((d) => ({ res: res, d: d })))
+      .then((r) => {
+        if (!r.res.ok) throw new Error(r.d.detail || ('HTTP ' + r.res.status));
+        state.auto.repo = r.d.repo;
+        setBuild('⏳ កំពុង build APK… <a href="' + esc((r.d.url || '') + '/actions') + '" target="_blank" rel="noopener">មើល Actions</a>');
+        pollBuild();
+      })
+      .catch((err) => {
+        setBuild('⚠️ ' + esc(err.message || String(err)));
+        state.auto.busy = false;
+        el.autoBuild.disabled = false;
+      });
+  }
+
+  function pollBuild() {
+    clearTimeout(state.auto.timer);
+    state.auto.timer = setTimeout(() => {
+      fetch('/api/appforge/status?repo=' + encodeURIComponent(state.auto.repo), { cache: 'no-store' })
+        .then((r) => r.json())
+        .then((d) => {
+          if (d.state === 'done' && d.apk_ready) {
+            setBuild('✅ APK រួចរាល់ — <a href="/api/appforge/apk?repo=' +
+              encodeURIComponent(state.auto.repo) + '">⬇️ ទាញយក app-debug.apk</a>');
+            state.auto.busy = false;
+            el.autoBuild.disabled = false;
+            return;
+          }
+          if (d.state === 'failed') {
+            setBuild('❌ build មិនជោគជ័យ — <a href="' + esc(d.run_url || '#') +
+              '" target="_blank" rel="noopener">មើល log</a>');
+            state.auto.busy = false;
+            el.autoBuild.disabled = false;
+            return;
+          }
+          setBuild('⏳ ' + (d.state === 'starting' || d.state === 'unknown' ? 'ចាប់ផ្តើម…' : 'កំពុង build…') +
+            (d.run_url ? ' <a href="' + esc(d.run_url) + '" target="_blank" rel="noopener">Actions</a>' : ''));
+          pollBuild();
+        })
+        .catch(() => {
+          state.auto.timer = setTimeout(pollBuild, 8000);
+        });
+    }, 9000);
+  }
+
+  if (el.autoBuild) el.autoBuild.addEventListener('click', autoBuild);
+  if (el.autoCard) el.autoCard.hidden = false;
+  fetch('/api/appforge/ready', { cache: 'no-store' })
+    .then((r) => r.json())
+    .then((d) => {
+      if (!d || !d.github) {
+        el.autoBuild.disabled = true;
+        setBuild('⚠️ Server មិនទាន់មាន <b>GITHUB_TOKEN</b> — បន្ថែមក្នុង Render → Environment រួច reload');
+      } else {
+        setBuild('រួចរាល់ — ចុច “🚀 បង្កើត APK” ខាងលើ');
+      }
+    })
+    .catch(() => setBuild('— ប្រើ ZIP + GitHub ដោយដៃបានធម្មតា'));
 
   function renderPreview(result) {
     const c = result.config;

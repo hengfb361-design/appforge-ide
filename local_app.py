@@ -1121,7 +1121,7 @@ def _af_files(payload) -> list:
 @app.get("/api/appforge/ready")
 def appforge_ready():
     """Lets the page hide the button instead of failing on click."""
-    return {"ok": True, "github": bool(_af_token())}
+    return {"ok": True, "github": bool(_af_token()), "build": "v3"}
 
 
 @app.post("/api/appforge/build")

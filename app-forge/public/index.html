@@ -22,7 +22,6 @@
   <section id="view-builder" class="view active">
     <div class="hero">
       <h1>បង្កើត App Android ក្នុង ១ នាទី</h1>
-      <p>បំពេញព័ត៌មានខាងក្រោម → ទាញយក ZIP → ដាក់លើ GitHub → បាន <b>APK</b> ពី Actions ដោយឥតគិតថ្លៃ។</p>
     </div>
 
     <div class="grid">
@@ -46,8 +45,9 @@
           </label>
         </div>
 
-        <h2>២. ប្រភេទ App</h2>
-        <div id="templates" class="templates"></div>
+        <label>ប្រភេទ App
+          <select id="template"></select>
+        </label>
 
         <label class="url-wrap" id="urlWrap">URL វេបសាយ (សម្រាប់ WebView)
           <input id="url" type="url" placeholder="https://buffy-ai.onrender.com" />
@@ -83,8 +83,10 @@
         <div class="actions">
           <button id="genBtn" class="primary">⚡ បង្កើត Project</button>
           <button id="zipBtn" class="ghost" disabled>⬇️ ទាញយក ZIP</button>
+          <button id="autoBuild" class="primary" hidden>🚀 បង្កើត APK</button>
         </div>
         <p class="hint" id="hint">គ្មាន API key គ្មាន server — កូដបង្កើតនៅក្នុង browser របស់អ្នក។</p>
+        <p class="build-status" id="buildStatus"></p>
       </div>
 
       <div class="card preview">
@@ -113,27 +115,6 @@
         <pre class="code"><code id="fileCode">—</code></pre>
       </div>
     </div>
-  </section>
-
-  <!-- ---------------------------- auto apk build ---------------------------- -->
-  <section class="card auto" id="autoCard" hidden>
-    <h2>🚀 បង្កើត APK ដោយស្វ័យប្រវត្តិ</h2>
-    <p class="hint">Server បង្កើត GitHub repo ឲ្យ, push កូដ, រត់ GitHub Actions និងបញ្ជូន APK មកវិញ — អ្នកមិនត្រូវធ្វើអ្វីដោយដៃទេ។</p>
-    <div class="row">
-      <label>ឈ្មោះ repo
-        <input id="repoName" type="text" placeholder="my-app" />
-      </label>
-      <label>ឯកជន
-        <select id="repoPrivate">
-          <option value="0">Public (ឥតគិតថ្លៃ)</option>
-          <option value="1">Private</option>
-        </select>
-      </label>
-    </div>
-    <div class="actions">
-      <button id="autoBuild" class="primary">🚀 បង្កើត APK</button>
-    </div>
-    <p class="build-status" id="buildStatus">រង់ចាំ…</p>
   </section>
 
   <!-- ------------------------------- snippets ------------------------------ -->

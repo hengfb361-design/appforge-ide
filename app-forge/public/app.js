@@ -14,7 +14,6 @@
     description: $('#description'),
     descWrap: $('#descWrap'),
     color: $('#color'),
-    templates: $('#templates'),
     swatches: $('#swatches'),
     js: $('#tJs'),
     back: $('#tBack'),
@@ -36,9 +35,7 @@
     summary: $('#summary'),
     snippetList: $('#snippetList'),
     verify: $('#verify'),
-    autoCard: $('#autoCard'),
-    repoName: $('#repoName'),
-    repoPrivate: $('#repoPrivate'),
+    template: $('#template'),
     autoBuild: $('#autoBuild'),
     buildStatus: $('#buildStatus')
   };
@@ -50,21 +47,21 @@
   /* ------------------------------- templates ------------------------------- */
 
   G.TEMPLATES.forEach((t) => {
-    const b = document.createElement('button');
-    b.className = 'tpl' + (t.id === state.template ? ' on' : '');
-    b.dataset.id = t.id;
-    b.innerHTML = '<span class="ico">' + t.icon + '</span><span><b>' + t.label + '</b><small>' + t.desc + '</small></span>';
-    b.addEventListener('click', () => {
-      state.template = t.id;
-      [...el.templates.children].forEach((n) => n.classList.toggle('on', n.dataset.id === t.id));
-      syncTemplateUi();
-      generate();
-    });
-    el.templates.appendChild(b);
+    const opt = document.createElement('option');
+    opt.value = t.id;
+    opt.textContent = t.icon + '  ' + t.label + ' — ' + t.desc;
+    el.template.appendChild(opt);
+  });
+  el.template.value = state.template;
+  el.template.addEventListener('change', () => {
+    state.template = el.template.value;
+    syncTemplateUi();
+    generate();
   });
 
   function syncTemplateUi() {
     const webview = state.template === 'webview';
+    el.template.value = state.template;
     el.urlWrap.hidden = !webview;
     el.descWrap.hidden = state.template !== 'desc';
     el.pull.disabled = !webview;
@@ -124,7 +121,7 @@
       if (typeof t.pull === 'boolean') el.pull.checked = t.pull;
       if (typeof t.external === 'boolean') el.external.checked = t.external;
       if (typeof t.dark === 'boolean') el.dark.checked = t.dark;
-      [...el.templates.children].forEach((n) => n.classList.toggle('on', n.dataset.id === state.template));
+      syncTemplateUi();
     } catch (e) {
       /* bad json: ignore */
     }
@@ -181,8 +178,7 @@
   }
 
   function repoSlug() {
-    const raw = (el.repoName.value || '').trim();
-    const base = raw || (state.result ? state.result.config.pkg.split('.').pop() : 'app');
+    const base = state.result ? state.result.config.pkg.split('.').pop() : 'app';
     return base.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'app';
   }
 
@@ -193,7 +189,7 @@
     setBuild('🚀 កំពុងបង្កើត repo នៅ GitHub…');
     const body = {
       repo: repoSlug(),
-      private: el.repoPrivate.value === '1',
+      private: false,
       files: state.result.files.map((f) => ({ path: f.path, text: f.text }))
     };
     fetch('/api/appforge/build', {
@@ -246,18 +242,17 @@
   }
 
   if (el.autoBuild) el.autoBuild.addEventListener('click', autoBuild);
-  if (el.autoCard) el.autoCard.hidden = false;
   fetch('/api/appforge/ready', { cache: 'no-store' })
     .then((r) => r.json())
     .then((d) => {
-      if (!d || !d.github) {
-        el.autoBuild.disabled = true;
-        setBuild('⚠️ Server មិនទាន់មាន <b>GITHUB_TOKEN</b> — បន្ថែមក្នុង Render → Environment រួច reload');
+      if (d && d.github) {
+        el.autoBuild.hidden = false;
+        setBuild('រួចរាល់ — ចុច “⚡ បង្កើត Project” រួច “🚀 បង្កើត APK”');
       } else {
-        setBuild('រួចរាល់ — ចុច “🚀 បង្កើត APK” ខាងលើ');
+        setBuild('');
       }
     })
-    .catch(() => setBuild('— ប្រើ ZIP + GitHub ដោយដៃបានធម្មតា'));
+    .catch(() => setBuild(''));
 
   function renderPreview(result) {
     const c = result.config;

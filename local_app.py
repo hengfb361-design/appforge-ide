@@ -41,7 +41,8 @@ from urllib.parse import quote_plus, urlparse
 import requests
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse, Response
+from fastapi.responses import (HTMLResponse, JSONResponse, StreamingResponse,
+                               Response)
 from pydantic import BaseModel
 from typing import List
 
@@ -1243,8 +1244,27 @@ def appforge_apk(repo: str = ""):
         return JSONResponse({"detail": "បរាជ័យ: %s" % str(exc)[:120]}, status_code=502)
 
 
+def _appforge_page() -> str:
+    """AppForge's index.html, with its asset URLs made absolute for "/"."""
+    try:
+        with open(os.path.join(_APPFORGE_DIR, "index.html"), "r", encoding="utf-8") as fh:
+            html = fh.read()
+    except OSError:
+        return ('<!doctype html><meta charset="utf-8"><title>AppForge</title>'
+                '<p>AppForge: <a href="/appforge/">/appforge/</a></p>')
+    return (html.replace('href="./', 'href="/appforge/')
+                .replace('src="./', 'src="/appforge/'))
+
+
 @app.get("/", response_class=HTMLResponse)
 def index():
+    """The landing page is AppForge now; the old chat UI lives at /buffy."""
+    return HTMLResponse(_appforge_page(),
+                        headers={"Cache-Control": "no-store, max-age=0"})
+
+
+@app.get("/buffy", response_class=HTMLResponse)
+def buffy_chat():
     # no-store: a phone that cached the old page kept showing a UI with no 🎬
     # button, so the new build looked broken until a hard refresh.
     return HTMLResponse(PAGE, headers={"Cache-Control": "no-store, max-age=0",

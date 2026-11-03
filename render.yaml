@@ -1,0 +1,14 @@
+# Render Blueprint — creates AppForge as its own free static site.
+# In the Render dashboard: New + → Blueprint → pick this repo.
+# (The existing buffy-ai web service is not managed by this file.)
+services:
+  - type: web
+    name: appforge
+    runtime: static
+    buildCommand: echo "static files, nothing to build"
+    staticPublishPath: ./app-forge/public
+    pullRequestPreviewsEnabled: false
+    headers:
+      - path: /*
+        name: X-Frame-Options
+        value: SAMEORIGIN

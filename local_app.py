@@ -197,6 +197,16 @@ SYSTEM_INSTRUCTION = (
 
 app = FastAPI(title="Buffy AI (local)")
 
+# AppForge (the Android app builder in app-forge/public) is plain static files,
+# so it rides on this service instead of needing a second Render deploy.
+# https://buffy-ai.onrender.com/appforge/
+_APPFORGE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "app-forge", "public")
+if os.path.isdir(_APPFORGE_DIR):
+    from fastapi.staticfiles import StaticFiles
+    app.mount("/appforge", StaticFiles(directory=_APPFORGE_DIR, html=True),
+              name="appforge")
+
 # The website on another origin calls this server straight from the browser,
 # so allow cross-origin requests. No cookies are used (the key travels in a
 # header), which is why "*" is safe here.

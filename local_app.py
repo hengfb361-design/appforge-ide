@@ -1064,6 +1064,15 @@ _AF_MAX_FILES = 80
 _AF_MAX_BYTES = 900_000
 
 
+def _gh_msg(resp) -> str:
+    """GitHub explains refusals (scopes, size); surface that instead of a code."""
+    try:
+        msg = (resp.json() or {}).get("message") or ""
+    except Exception:
+        msg = ""
+    return (msg or "").strip()[:160]
+
+
 def _gh(method: str, path: str, payload=None):
     """Call the GitHub REST API with the server-side token."""
     return requests.request(
@@ -1129,7 +1138,7 @@ def _af_files(payload) -> list:
 @app.get("/api/appforge/ready")
 def appforge_ready():
     """Lets the page hide the button instead of failing on click."""
-    return {"ok": True, "github": bool(_af_token()), "build": "v4",
+    return {"ok": True, "github": bool(_af_token()), "build": "v5",
             "token_var": _af_token_name(),
             "env_names": sorted(k for k in os.environ
                                 if "GITHUB" in k.upper() or k.lower().startswith("gh"))}
@@ -1161,7 +1170,7 @@ async def appforge_build(request: Request):
     try:
         me = _gh("GET", "/user")
         if me.status_code != 200:
-            return JSONResponse({"detail": "GitHub token មិនត្រឹមត្រូវ ឬផុតកំណត់"}, status_code=502)
+            return JSONResponse({"detail": "GitHub token មិនត្រឹមត្រូវ ឬផុតកំណត់ (%s)" % _gh_msg(me)}, status_code=502)
         owner = (me.json() or {}).get("login") or ""
         created = _gh("POST", "/user/repos", {
             "name": name,
@@ -1171,7 +1180,7 @@ async def appforge_build(request: Request):
         })
         if created.status_code not in (201, 422):
             return JSONResponse(
-                {"detail": "បង្កើត repo មិនបាន (GitHub %s)" % created.status_code},
+                {"detail": "បង្កើត repo មិនបាន (GitHub %s: %s)" % (created.status_code, _gh_msg(created))},
                 status_code=502,
             )
         full = owner + "/" + name
@@ -1183,7 +1192,7 @@ async def appforge_build(request: Request):
             })
             if put.status_code not in (200, 201):
                 return JSONResponse(
-                    {"detail": "push %s មិនបាន (GitHub %s)" % (path, put.status_code)},
+                    {"detail": "push %s មិនបាន (GitHub %s: %s)" % (path, put.status_code, _gh_msg(put))},
                     status_code=502,
                 )
         html_url = (created.json() or {}).get("html_url") or ("https://github.com/" + full)

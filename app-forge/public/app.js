@@ -28,6 +28,8 @@
     fileCode: $('#fileCode'),
     fileCount: $('#fileCount'),
     copyAll: $('#copyAll'),
+    newFile: $('#newFile'),
+    editNote: $('#editNote'),
     screen: $('#screen'),
     appBar: $('#appBar'),
     barTitle: $('#barTitle'),
@@ -41,6 +43,7 @@
   };
 
   const state = { template: 'webview', result: null, activeFile: 0, zipUrl: null,
+    custom: {}, extra: [],
     auto: { repo: '', busy: false, timer: null } };
   const STORE = 'appforge.v1';
 
@@ -129,9 +132,24 @@
 
   /* -------------------------------- generate ------------------------------- */
 
+  /* Keep hand-written edits and added files when the form regenerates. */
+  function applyEdits(result) {
+    result.files.forEach((f) => {
+      if (Object.prototype.hasOwnProperty.call(state.custom, f.path)) f.text = state.custom[f.path];
+    });
+    const seen = new Set(result.files.map((f) => f.path));
+    state.extra.forEach((f) => {
+      if (!seen.has(f.path)) {
+        result.files.push(f);
+        seen.add(f.path);
+      }
+    });
+    return result;
+  }
+
   function generate() {
     const cfg = config();
-    const result = G.build(cfg);
+    const result = applyEdits(G.build(cfg));
     state.result = result;
     state.activeFile = 0;
     state.zipUrl = null;
@@ -298,14 +316,64 @@
     const files = state.result ? state.result.files : [];
     const file = files[index];
     if (!file) {
-      el.fileCode.textContent = '—';
+      el.fileCode.value = '';
       return;
     }
     state.activeFile = index;
-    el.fileCode.textContent = file.text;
+    el.fileCode.value = file.text;
     [...el.fileTree.children].forEach((li, i) => li.classList.toggle('on', i === index));
-    el.fileCode.parentElement.scrollTop = 0;
+    el.fileCode.scrollTop = 0;
+    if (el.editNote) el.editNote.textContent = file.path + ' · កែបានផ្ទាល់';
   }
+
+  /* ------------------------------ edit / new file ---------------------------- */
+
+  function safePath(raw) {
+    const path = String(raw == null ? '' : raw).trim().replace(/^\/+/, '').replace(/\\/g, '/');
+    if (!path || path.length > 200) return '';
+    if (path.split('/').some((part) => part === '' || part === '.' || part === '..')) return '';
+    if (!/^[A-Za-z0-9._\-/]+$/.test(path)) return '';
+    return path;
+  }
+
+  el.fileCode.addEventListener('input', () => {
+    if (!state.result) return;
+    const file = state.result.files[state.activeFile];
+    if (!file) return;
+    file.text = el.fileCode.value;
+    state.custom[file.path] = file.text;
+    state.zipUrl = null;
+    renderVerify(state.result);
+    if (el.editNote) el.editNote.textContent = file.path + ' · កែរួច (នឹងចូលក្នុង ZIP/APK)';
+  });
+
+  el.newFile.addEventListener('click', () => {
+    const typed = window.prompt('ឈ្មោះឯកសារថ្មី (ឧ. app/src/main/java/com/example/app/Extra.kt)',
+      'app/src/main/java/');
+    if (typed === null) return;
+    const path = safePath(typed);
+    if (!path) {
+      window.alert('ឈ្មោះឯកសារមិនត្រឹមត្រូវ — ប្រើតែអក្សរ លេខ . _ - /');
+      return;
+    }
+    if (!state.result) generate();
+    const files = state.result.files;
+    const existing = files.findIndex((f) => f.path === path);
+    if (existing >= 0) {
+      renderTree(state.result);
+      renderCode(existing);
+      return;
+    }
+    const file = { path: path, text: '' };
+    files.push(file);
+    state.extra.push(file);
+    state.zipUrl = null;
+    renderSummary(state.result);
+    renderVerify(state.result);
+    renderTree(state.result);
+    renderCode(files.length - 1);
+    el.fileCode.focus();
+  });
 
   /* -------------------------------- download ------------------------------- */
 
@@ -396,11 +464,12 @@
    el.js, el.back, el.pull, el.external, el.dark].forEach((node) => {
     node.addEventListener('input', () => {
       if (!state.result) return;
-      const result = G.build(config());
+      const result = applyEdits(G.build(config()));
       state.result = result;
       state.zipUrl = null;
       renderSummary(result);
       renderPreview(result);
+      renderVerify(result);
       saveForm();
     });
   });
@@ -410,10 +479,11 @@
     if (!c) return;
     el.color.value = c.dataset.color;
     if (state.result) {
-      state.result = G.build(config());
+      state.result = applyEdits(G.build(config()));
       state.zipUrl = null;
       renderPreview(state.result);
       renderSummary(state.result);
+      renderVerify(state.result);
     }
     saveForm();
   });

@@ -108,11 +108,18 @@
     <div class="card files" id="filesCard" hidden>
       <div class="files-head">
         <h2>ឯកសារដែលបានបង្កើត <span id="fileCount" class="pill"></span></h2>
-        <button id="copyAll" class="ghost small">⧉ ចម្លងកូដឯកសារនេះ</button>
+        <div class="files-tools">
+          <button id="newFile" class="ghost small">＋ ឯកសារថ្មី</button>
+          <button id="copyAll" class="ghost small">⧉ ចម្លងកូដឯកសារនេះ</button>
+        </div>
       </div>
       <div class="files-body">
         <ul id="fileTree" class="tree"></ul>
-        <pre class="code"><code id="fileCode">—</code></pre>
+        <div class="editor">
+          <textarea id="fileCode" class="code" spellcheck="false" autocomplete="off"
+            autocapitalize="off" autocorrect="off" placeholder="—"></textarea>
+          <div class="editor-note" id="editNote">កែបានផ្ទាល់ — ការកែត្រូវរក្សាទុកពេលបង្កើត ZIP/APK</div>
+        </div>
       </div>
     </div>
   </section>

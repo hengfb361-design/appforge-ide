@@ -176,6 +176,15 @@ PAGE = r"""<!doctype html>
   .gen-img{margin-top:10px}
   .gen-img img{max-width:100%;border-radius:14px;border:1px solid var(--border);display:block}
   .gen-img a{display:inline-block;margin-top:8px;font-size:12px;color:#7fb2ff;text-decoration:none}
+  .gen-img .vid-btn{
+    margin-top:8px;margin-left:10px;padding:6px 12px;border-radius:9px;cursor:pointer;border:none;
+    background:linear-gradient(135deg,var(--accent-2),var(--accent));color:#fff;font-size:12px;font-weight:600;
+  }
+  .gen-img .vid-btn:hover{filter:brightness(1.1)}
+  .gen-img .vid-btn:disabled{opacity:.5;cursor:not-allowed}
+  .gen-video{margin-top:10px}
+  .gen-video video{max-width:100%;border-radius:14px;border:1px solid var(--border);display:block;background:#000}
+  .gen-video a{display:inline-block;margin-top:8px;font-size:12px;color:#7fb2ff;text-decoration:none}
 
   /* composer */
   .composer-wrap{padding:10px 16px 16px;background:linear-gradient(to top,var(--bg) 55%,rgba(15,16,18,0))}
@@ -232,14 +241,19 @@ PAGE = r"""<!doctype html>
     </div>
     <button class="new-chat" id="newChat">＋ រូបភាពថ្មី</button>
 
-    <div class="side-label">Server រូបភាព — Kaggle</div>
+    <div class="side-label">Server រូបភាព · វីដេអូ — Colab/Kaggle</div>
     <div class="conn" id="connStatus"><span class="dot"></span>រង់ចាំ server …</div>
     <div class="side-actions">
-      <button class="ghost" id="copyCmd">📋 ចម្លងបន្ទាត់ Kaggle</button>
+      <button class="ghost" id="copyCmd">📋 ចម្លងបន្ទាត់ Colab</button>
     </div>
     <label class="toggle" for="imageFast">
       <span>⚡ លឿន (១២ ជំហាន)</span>
       <input type="checkbox" id="imageFast" checked />
+      <i class="switch"></i>
+    </label>
+    <label class="toggle" for="videoLong">
+      <span>🎬 វីដេអូ ១០ វិនាទី (យឺត)</span>
+      <input type="checkbox" id="videoLong" />
       <i class="switch"></i>
     </label>
 
@@ -310,6 +324,7 @@ PAGE = r"""<!doctype html>
   const webSearch = { checked: false };
   const imageMode = { checked: true };
   const modePill = $("#modePill");
+  const videoLong = $("#videoLong");
   const topTitle = $("#topTitle");
   const connStatusEl = $("#connStatus");
   const STORE = "buffy-ai-chat-v2";
@@ -372,13 +387,13 @@ PAGE = r"""<!doctype html>
       setConn("មិនអាចភ្ជាប់ទៅ server", "bad");
     }
   }
-  const KAGGLE_CMD = "!curl -fsSL -o /kaggle/working/buffy-image-start.sh https://raw.githubusercontent.com/hengfb361-design/buffy-ai/main/kaggle-start.sh && bash /kaggle/working/buffy-image-start.sh";
+  const KAGGLE_CMD = "!curl -fsSL -o /content/buffy-start.sh https://raw.githubusercontent.com/hengfb361-design/buffy-ai/main/kaggle-start.sh && bash /content/buffy-start.sh";
   const copyBtn = $("#copyCmd");
   if (copyBtn) copyBtn.onclick = async () => {
     try {
       await navigator.clipboard.writeText(KAGGLE_CMD);
       copyBtn.textContent = "✅ ចម្លងរួច";
-      setTimeout(() => { copyBtn.textContent = "📋 ចម្លងបន្ទាត់ Kaggle"; }, 2000);
+      setTimeout(() => { copyBtn.textContent = "📋 ចម្លងបន្ទាត់ Colab"; }, 2000);
     } catch (e) {
       setConn("ចម្លងស្វ័យប្រវត្តិមិនបាន — សូមថតដោយដៃ", "bad");
     }
@@ -426,7 +441,14 @@ PAGE = r"""<!doctype html>
     const cfg = node.querySelector(".cfg");
     let html = "";
     if (m.img) {
-      html += '<div class="gen-img"><img src="' + esc(m.img.url) + '" alt="generated" /><a href="' + esc(m.img.url) + '" download="buffy-ai.png">⬇️ ទាញយករូបភាព</a></div>';
+      html += '<div class="gen-img"><img src="' + esc(m.img.url) + '" alt="generated" />' +
+        '<a href="' + esc(m.img.url) + '" download="buffy-ai.png">⬇️ ទាញយករូបភាព</a>' +
+        (m.video ? "" : '<button class="vid-btn" data-act="video">🎬 ធ្វើវីដេអូ</button>') +
+        "</div>";
+    }
+    if (m.video && m.video.url) {
+      html += '<div class="gen-video"><video src="' + esc(m.video.url) + '" controls loop playsinline></video>' +
+        '<a href="' + esc(m.video.url) + '" download="buffy-ai.webm">⬇️ ទាញយកវីដេអូ</a></div>';
     }
     if (m.sources && m.sources.length) {
       html += '<div class="sources"><div class="lbl">ប្រភព</div><div class="source-list">' +
@@ -442,6 +464,8 @@ PAGE = r"""<!doctype html>
     cfg.innerHTML = html;
     const copyBtn = cfg.querySelector('[data-act="copy"]');
     if (copyBtn) copyBtn.onclick = () => navigator.clipboard.writeText(m.text || "");
+    const vidBtn = cfg.querySelector('[data-act="video"]');
+    if (vidBtn) vidBtn.onclick = () => startVideo(m);
   }
 
   function setStatus(node, text) {
@@ -606,6 +630,91 @@ PAGE = r"""<!doctype html>
       setStatus(aNode, "🎨 " + stage + "… " + fmtSecs(secs) + " · " + steps +
         " ជំហាន (រូបដំបូងយូរ ព្រោះ load model)");
     }
+  }
+
+  /* Image→video. The picture the user is looking at becomes frame 1, so the
+     server only needs that image plus a motion prompt. */
+  async function runVideoJob(imageUrl, prompt, aMsg, aNode, paint, controller) {
+    const frames = videoLong && videoLong.checked ? 257 : 121;
+    setStatus(aNode, "🎬 កំពុងផ្ញើទៅ server វីដេអូ…");
+    const start = await fetch(endpoint("/api/video/start"), {
+      method: "POST",
+      headers: requestHeaders(true),
+      body: JSON.stringify({ prompt, image: imageUrl, frames, width: 768, height: 512 }),
+      signal: controller.signal,
+    });
+    if (!start.ok) {
+      let msg = await start.text();
+      try { msg = JSON.parse(msg).detail || msg; } catch (e) {}
+      throw new Error(String(msg).slice(0, 220) || "HTTP " + start.status);
+    }
+    const job = await start.json();
+    if (!job.job_id) throw new Error("server មិនផ្តល់ job id");
+    const total = job.frames || frames;
+    const t0 = Date.now();
+    for (;;) {
+      await new Promise((r) => setTimeout(r, 4000));
+      if (controller.signal.aborted) return;
+      let d;
+      try {
+        const r = await fetch(endpoint("/api/video/status/" + job.job_id), {
+          headers: requestHeaders(false),
+          signal: controller.signal,
+        });
+        d = await r.json();
+      } catch (e) {
+        if (e && e.name === "AbortError") return;
+        setStatus(aNode, "🎬 កំពុងរង់ចាំ server… " + fmtSecs((Date.now() - t0) / 1000));
+        continue;
+      }
+      const secs = (Date.now() - t0) / 1000;
+      if (d.status === "done" && d.data) {
+        aMsg.video = { url: "data:" + (d.mime || "video/webm") + ";base64," + d.data };
+        setStatus(aNode, null);
+        paint();
+        return;
+      }
+      if (d.status === "error") throw new Error(d.error || "បង្កើតវីដេអូមិនបាន");
+      const stage = d.status === "queued" ? "ចូលជួរ" : "កំពុងបង្កើត";
+      setStatus(aNode, "🎬 " + stage + "… " + fmtSecs(secs) + " · " + total + " frames (~" +
+        ((total - 1) / 24).toFixed(1) + " វិ) — យូរ ៥–១៥ នាទី");
+    }
+  }
+
+  function startVideo(srcMsg) {
+    if (state.busy || !srcMsg || !srcMsg.img) return;
+    const lastUser = [...state.messages].reverse().find((m) => m.role === "user" && m.text);
+    const prompt = (lastUser ? lastUser.text : "cinematic scene") +
+      ", smooth natural motion, cinematic lighting";
+    const frames = videoLong && videoLong.checked ? 257 : 121;
+    const userMsg = { role: "user", text: "🎬 ធ្វើវីដេអូ " + (frames === 257 ? "១០ វិនាទី" : "៥ វិនាទី") };
+    state.messages.push(userMsg);
+    newBubble("user", userMsg);
+    const aMsg = { role: "assistant", text: "", sources: [], video: null, done: false };
+    state.messages.push(aMsg);
+    const aNode = newBubble("assistant");
+    setBusy(true);
+    const controller = new AbortController();
+    state.controller = controller;
+    let raf = null;
+    const paint = () => {
+      if (raf) return;
+      raf = requestAnimationFrame(() => { raf = null; renderAssistantBody(aNode, aMsg); scrollToBottom(false); });
+    };
+    runVideoJob(srcMsg.img.url, prompt, aMsg, aNode, paint, controller)
+      .catch((err) => {
+        if (err && err.name === "AbortError") return;
+        aMsg.text = (aMsg.text ? aMsg.text + "\n\n" : "") + "> ⚠️ " + (err.message || err);
+      })
+      .finally(() => {
+        aMsg.done = true;
+        setStatus(aNode, null);
+        setBusy(false);
+        state.controller = null;
+        renderAssistantBody(aNode, aMsg);
+        scrollToBottom(false);
+        save();
+      });
   }
 
   async function send() {

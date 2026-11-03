@@ -79,6 +79,23 @@ TURBO_SIGMAS = "1.0, 0.978453, 0.95418, 0.926626, 0.89508, 0.845148, 0.704534, 0
 IMAGE_STEPS = int(os.environ.get("IMAGE_STEPS", "20"))
 IMAGE_TIMEOUT = int(os.environ.get("IMAGE_TIMEOUT", "900"))
 
+# Optional image→video. LTX-Video 2B runs in the same ComfyUI; the checkpoint
+# carries MODEL+VAE and a separate T5 encoder is loaded with CLIPLoader. An
+# empty VIDEO_MODEL means the feature is off (no weights on disk) and the
+# browser hides the button.
+VIDEO_MODEL = os.environ.get("VIDEO_MODEL", "").strip()
+VIDEO_CLIP = os.environ.get("VIDEO_CLIP", "t5xxl_fp8_e4m3fn_scaled.safetensors").strip()
+VIDEO_FPS = int(os.environ.get("VIDEO_FPS", "24"))
+VIDEO_FRAMES = int(os.environ.get("VIDEO_FRAMES", "121"))
+VIDEO_WIDTH = int(os.environ.get("VIDEO_WIDTH", "768"))
+VIDEO_HEIGHT = int(os.environ.get("VIDEO_HEIGHT", "512"))
+VIDEO_STEPS = int(os.environ.get("VIDEO_STEPS", "30"))
+VIDEO_CFG = float(os.environ.get("VIDEO_CFG", "3.0"))
+VIDEO_STRENGTH = float(os.environ.get("VIDEO_STRENGTH", "0.15"))
+# 121 frames ≈ 5s at 24fps. 257 frames ≈ 10.7s is allowed by the node but needs
+# far more VRAM, so generate_video halves the length once if ComfyUI runs out.
+VIDEO_TIMEOUT = int(os.environ.get("VIDEO_TIMEOUT", "2400"))
+
 # Optional web search for source citations (Exa). Read from the server
 # environment only — the browser never receives it.
 EXA_API_KEY = os.environ.get("EXA_API_KEY", "").strip()
@@ -374,6 +391,173 @@ def generate_image(prompt: str, width: int = 1024, height: int = 1024,
     except Exception as exc:  # noqa: BLE001
         traceback.print_exc()
         return None, "មិនអាចភ្ជាប់ទៅ ComfyUI បានទេ៖ %s" % str(exc)[:120]
+
+
+# ─── Video: រូប → វីដេអូ (LTX-Video 2B) ───────────────────────────────────────
+def _clamp_frames(n) -> int:
+    """LTX latents step by 8, so the frame count must be 8n+1 (97, 121, 257)."""
+    n = max(33, min(257, int(n or VIDEO_FRAMES)))
+    return ((n - 1) // 8) * 8 + 1
+
+
+def _video_workflow(prompt: str, negative: str, image_name: str, width: int,
+                    height: int, frames: int, seed: int, steps: int = 0) -> dict:
+    """ComfyUI's official LTXV image-to-video graph.
+
+    The checkpoint ships MODEL+VAE but no CLIP, so the T5 encoder is loaded on
+    its own. The template drives sampling through LTXVScheduler + SamplerCustom:
+    a plain KSampler ignores the LTX sigma shift and comes out muddy.
+    """
+    steps = steps or VIDEO_STEPS
+    return {
+        "44": {"class_type": "CheckpointLoaderSimple",
+               "inputs": {"ckpt_name": VIDEO_MODEL}},
+        "38": {"class_type": "CLIPLoader",
+               "inputs": {"clip_name": VIDEO_CLIP, "type": "ltxv",
+                          "device": "default"}},
+        "6": {"class_type": "CLIPTextEncode",
+              "inputs": {"text": prompt, "clip": ["38", 0]}},
+        "7": {"class_type": "CLIPTextEncode",
+              "inputs": {"text": negative, "clip": ["38", 0]}},
+        "78": {"class_type": "LoadImage",
+               "inputs": {"image": image_name, "upload": "image"}},
+        "77": {"class_type": "LTXVImgToVideo",
+               "inputs": {"positive": ["6", 0], "negative": ["7", 0],
+                          "vae": ["44", 2], "image": ["78", 0],
+                          "width": width, "height": height, "length": frames,
+                          "batch_size": 1, "strength": VIDEO_STRENGTH}},
+        "69": {"class_type": "LTXVConditioning",
+               "inputs": {"positive": ["77", 0], "negative": ["77", 1],
+                          "frame_rate": float(VIDEO_FPS)}},
+        "71": {"class_type": "LTXVScheduler",
+               "inputs": {"steps": steps, "max_shift": 2.05, "base_shift": 0.95,
+                          "stretch": True, "terminal": 0.1,
+                          "latent": ["77", 2]}},
+        "73": {"class_type": "KSamplerSelect", "inputs": {"sampler_name": "euler"}},
+        "72": {"class_type": "SamplerCustom",
+               "inputs": {"model": ["44", 0], "add_noise": True,
+                          "noise_seed": seed, "cfg": VIDEO_CFG,
+                          "positive": ["69", 0], "negative": ["69", 1],
+                          "sampler": ["73", 0], "sigmas": ["71", 0],
+                          "latent_image": ["77", 2]}},
+        "8": {"class_type": "VAEDecode",
+              "inputs": {"samples": ["72", 0], "vae": ["44", 2]}},
+        # SaveWEBM (vp9) instead of SaveVideo: the newer video nodes want a Video
+        # object plus a dynamic combo whose API shape is still in flux.
+        "82": {"class_type": "SaveWEBM",
+               "inputs": {"images": ["8", 0], "filename_prefix": "buffy-video",
+                          "codec": "vp9", "fps": float(VIDEO_FPS), "crf": 32}},
+    }
+
+
+def _comfy_upload(image_bytes: bytes, name: str = "buffy-input.png"):
+    """Put the source image where LoadImage can see it. (name, error)."""
+    try:
+        r = requests.post(
+            IMAGE_BASE_URL + "/upload/image",
+            files={"image": (name, image_bytes, "image/png")},
+            data={"overwrite": "true", "type": "input"},
+            timeout=120,
+        )
+    except Exception as exc:  # noqa: BLE001
+        traceback.print_exc()
+        return None, "បញ្ជូនរូបទៅ ComfyUI មិនបានទេ៖ %s" % str(exc)[:120]
+    if r.status_code != 200:
+        return None, "បញ្ជូនរូបទៅ ComfyUI មិនបាន (HTTP %s)៖ %s" % (r.status_code, r.text[:160])
+    info = r.json() or {}
+    nm = info.get("name") or name
+    sub = info.get("subfolder") or ""
+    return (sub + "/" + nm) if sub else nm, None
+
+
+def _video_once(prompt, negative, image_name, width, height, frames, seed, steps):
+    """(bytes, mime, error) for one ComfyUI run at a fixed frame count."""
+    try:
+        r = requests.post(
+            IMAGE_BASE_URL + "/prompt",
+            json={"prompt": _video_workflow(prompt, negative, image_name, width,
+                                              height, frames, seed, steps)},
+            timeout=60,
+        )
+        if r.status_code != 200:
+            return None, None, "ComfyUI បដិសេធ workflow វីដេអូ (HTTP %s)៖ %s" % (
+                r.status_code, r.text[:200])
+        pid = (r.json() or {}).get("prompt_id")
+        if not pid:
+            return None, None, "ComfyUI មិនផ្តល់ prompt_id"
+        deadline = time.time() + VIDEO_TIMEOUT
+        while time.time() < deadline:
+            time.sleep(3)
+            hist = requests.get(IMAGE_BASE_URL + "/history/" + pid, timeout=15).json() or {}
+            entry = hist.get(pid) or {}
+            for node in (entry.get("outputs") or {}).values():
+                for key in ("images", "gifs", "video", "videos"):
+                    for f in (node.get(key) or []):
+                        fn = (f.get("filename") or "")
+                        if not fn.lower().endswith((".webm", ".mp4", ".mkv", ".mov")):
+                            continue
+                        v = requests.get(
+                            IMAGE_BASE_URL + "/view",
+                            params={"filename": fn,
+                                    "subfolder": f.get("subfolder", ""),
+                                    "type": f.get("type", "output")},
+                            timeout=180,
+                        )
+                        if v.status_code == 200 and v.content:
+                            mime = "video/webm" if fn.lower().endswith(".webm") else "video/mp4"
+                            return v.content, mime, None
+            if (entry.get("status") or {}).get("status_str") == "error":
+                detail = json.dumps((entry.get("status") or {}).get("messages") or [])[:400]
+                return None, None, "ការបង្កើតវីដេអូបរាជ័យ៖ %s" % detail
+        return None, None, "អស់ពេលរង់ចាំវីដេអូ — សាកប្រើ ៥ វិនាទី (121 frames)"
+    except Exception as exc:  # noqa: BLE001
+        traceback.print_exc()
+        return None, None, "មិនអាចភ្ជាប់ទៅ ComfyUI បានទេ៖ %s" % str(exc)[:120]
+
+
+def generate_video(prompt: str, image_b64: str, width: int = 0, height: int = 0,
+                   frames: int = 0, steps: int = 0):
+    """(bytes, mime, error). Halves the length once if the GPU runs out of memory."""
+    if not VIDEO_MODEL:
+        return None, None, ("មុខងារវីដេអូមិនបានបើក — រត់បន្ទាត់ Kaggle/Colab "
+                            "ដែលទាញ LTX សិន។")
+    if not IMAGE_BASE_URL:
+        return None, None, "មិនមាន ComfyUI ភ្ជាប់ — សូមរត់បន្ទាត់ Kaggle សិន។"
+    width = max(256, min(1280, int(width or VIDEO_WIDTH)))
+    height = max(256, min(1280, int(height or VIDEO_HEIGHT)))
+    frames = _clamp_frames(frames)
+    steps = max(4, min(60, int(steps or VIDEO_STEPS)))
+    try:
+        raw = base64.b64decode((image_b64 or "").split(",")[-1])
+    except Exception:  # noqa: BLE001
+        return None, None, "រូបប្រភពមិនត្រឹមត្រូវ"
+    if len(raw) < 64:
+        return None, None, "សូមផ្ញើរូបប្រភព (រូបដែលបង្កើតរួច) មកមុន"
+    image_name, err = _comfy_upload(raw)
+    if not image_name:
+        return None, None, err
+
+    negative = ("blurry, low quality, watermark, text, jitter, flicker, "
+                "distorted, deformed, duplicate limbs")
+    seed = int(time.time()) % 2147483647
+    attempts = [frames]
+    for f in (frames // 2, 65):
+        f = _clamp_frames(f)
+        if f not in attempts:
+            attempts.append(f)
+
+    last = None
+    for f in attempts:
+        data, mime, err = _video_once(prompt, negative, image_name, width, height,
+                                      f, seed, steps)
+        if data:
+            return data, mime, None
+        last = err
+        # Only shrink when the failure is memory-related; anything else would
+        # just burn ten more minutes to fail again.
+        if "memory" not in (err or "").lower():
+            break
+    return None, None, last or "បង្កើតវីដេអូមិនបាន"
 
 
 # ─── Image jobs ─────────────────────────────────────────────────────────────
@@ -698,6 +882,90 @@ def image_status(jid: str):
     return out
 
 
+class VideoReq(BaseModel):
+    prompt: str = ""
+    image: str = ""
+    width: int = 768
+    height: int = 512
+    frames: int = 0
+    steps: int = 0
+
+
+def _video_job_run(jid: str, prompt: str, image: str, width: int, height: int,
+                   frames: int, steps: int) -> None:
+    _job_set(jid, status="running", started=time.time())
+    data, mime, err = generate_video(prompt, image, width, height, frames, steps)
+    if data:
+        _job_set(jid, status="done", data=base64.b64encode(data).decode(),
+                 mime=mime, error=None, ts=time.time())
+    else:
+        _job_set(jid, status="error", error=err or "បង្កើតវីដេអូមិនបាន", ts=time.time())
+
+
+def _video_start_local(req: "VideoReq"):
+    if not VIDEO_MODEL:
+        return JSONResponse(
+            {"detail": "មុខងារវីដេអូមិនបានបើក — រត់បន្ទាត់ Kaggle/Colab ម្តងទៀត"},
+            status_code=503,
+        )
+    if not IMAGE_BASE_URL:
+        return JSONResponse(
+            {"detail": "មិនមាន ComfyUI ភ្ជាប់ — សូមរត់បន្ទាត់ Kaggle ក្នុង sidebar សិន។"},
+            status_code=503,
+        )
+    if not (req.image or "").strip():
+        return JSONResponse(
+            {"detail": "សូមផ្ញើរូបប្រភព (រូបដែលបង្កើតរួច) មកមុន"}, status_code=400)
+    _job_gc()
+    width = max(256, min(1280, int(req.width or VIDEO_WIDTH)))
+    height = max(256, min(1280, int(req.height or VIDEO_HEIGHT)))
+    frames = _clamp_frames(req.frames or VIDEO_FRAMES)
+    steps = max(4, min(60, int(req.steps or VIDEO_STEPS)))
+    jid = os.urandom(8).hex()
+    with _JOBS_LOCK:
+        _JOBS[jid] = {"status": "queued", "ts": time.time(), "started": 0.0,
+                      "data": None, "mime": None, "error": None, "kind": "video",
+                      "frames": frames, "size": [width, height]}
+    threading.Thread(
+        target=_video_job_run,
+        args=(jid, (req.prompt or "").strip() or "gentle natural motion, cinematic",
+              req.image, width, height, frames, steps),
+        daemon=True,
+    ).start()
+    return JSONResponse({"job_id": jid, "frames": frames, "size": [width, height],
+                         "seconds": round(frames / float(VIDEO_FPS), 1)})
+
+
+@app.post("/api/video/start")
+def video_start(req: VideoReq):
+    """Queue image→video and return at once; the browser polls like for images."""
+    body = req.model_dump() if hasattr(req, "model_dump") else req.dict()
+    proxied = _proxy_json("POST", "/api/video/start", body, timeout=30)
+    if proxied is not None:
+        return proxied
+    return _video_start_local(req)
+
+
+@app.get("/api/video/status/{jid}")
+def video_status(jid: str):
+    proxied = _proxy_json("GET", "/api/video/status/" + jid)
+    if proxied is not None:
+        return proxied
+    snap = _job_snapshot(jid)
+    if not snap:
+        return JSONResponse({"detail": "រកមិនឃើញ job — សូមសាកម្តងទៀត។"}, status_code=404)
+    started = snap.get("started") or snap["ts"]
+    out = {"status": snap["status"],
+           "elapsed": round(max(0.0, time.time() - started), 1),
+           "frames": snap.get("frames")}
+    if snap["status"] == "done":
+        out["data"] = snap["data"]
+        out["mime"] = snap.get("mime") or "video/webm"
+    elif snap["status"] == "error":
+        out["error"] = snap["error"]
+    return out
+
+
 @app.get("/api/health")
 def health(request: Request):
     """Reports the active engine. Deliberately never exposes the key value."""
@@ -722,6 +990,7 @@ def health(request: Request):
         "access_key_required": bool(ACCESS_KEY),
         "web_search": "exa" if EXA_API_KEY else "off",
         "image": "remote" if remote_alive() else ("comfyui" if image_ready() else "off"),
+        "video": "on" if VIDEO_MODEL else "off",
         "remote": {"url": remote_url(), "alive": remote_alive()},
     }
 

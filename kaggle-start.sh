@@ -16,6 +16,11 @@
 #   ៤. បើក ComfyUI (ផ្ទៃក្នុង) + server Buffy (local_app.py) + tunnel តែមួយ
 #   ៥. បង្ហាញ URL សម្រាប់ website — គ្មាន API key ត្រូវការ
 #
+# មុខងារវីដេអូ (រូប → វីដេអូ, LTX-Video 2B) បើកស្វ័យប្រវត្តិ (~១១GB បន្ថែម)។
+# បិទវាដោយ BUFFY_VIDEO=0 បើ disk មិនគ្រប់៖
+#
+#   !BUFFY_VIDEO=0 bash /content/buffy-start.sh
+#
 # ជម្រើស model (env BUFFY_IMAGE_MODEL = auto | fp8_hq | int8_2_1)៖
 #   auto     = ជ្រើសតាម VRAM (លំនាំដើម) — VRAM < 24GB → int8_2_1
 #   fp8_hq   = Qwen-Image fp8_hq · 22.7 + 9.4 + 0.3GB = 32.4GB (ត្រូវការ VRAM ≥ 24GB)
@@ -46,6 +51,18 @@ PORT="${PORT:-8000}"
 
 # model ធំៗ ដាក់ក្រៅ ComfyUI (ប្រើ extra_model_paths) ដើម្បីកុំ copy ទ្វេ
 MODELS_DIR="${BUFFY_MODELS_DIR:-$ROOT_DIR/buffy-image-models}"
+
+# ─── វីដេអូ (រូប → វីដេអូ, LTX-Video 2B) ───
+# BUFFY_VIDEO=0 បិទមុខងារនេះ (សន្សំ disk ~១១GB) — រូបភាពនៅដំណើរការធម្មតា
+VIDEO_ENABLE="${BUFFY_VIDEO:-1}"
+VIDEO_CKPT_NAME="ltx-video-2b-v0.9.5.safetensors"
+VIDEO_TE_NAME="t5xxl_fp8_e4m3fn_scaled.safetensors"
+VIDEO_MODEL_ENV=""
+VIDEO_CLIP_ENV=""
+VIDEO_GB=0
+if [ "$VIDEO_ENABLE" != "0" ]; then
+  VIDEO_GB=12
+fi
 
 say()  { printf '\n\033[1;36m%s\033[0m\n' "$*"; }
 ok()   { printf '\033[1;32m✅ %s\033[0m\n' "$*"; }
@@ -126,7 +143,7 @@ if [ "$MEM_GIB" -gt 0 ] && [ "$WEIGHTS_GB" -gt "$MEM_GIB" ]; then
   echo "   ដំណោះស្រាយ៖ !BUFFY_IMAGE_MODEL=int8_2_1 bash $SELF"
 fi
 
-NEED_GB=$(( DM_GB + TE_GB + VA_GB + 6 ))
+NEED_GB=$(( DM_GB + TE_GB + VA_GB + VIDEO_GB + 6 ))
 mkdir -p "$MODELS_DIR" "$WORK" || die "បង្កើត $MODELS_DIR មិនបាន"
 
 FREE_GB=$(df -BG --output=avail "$MODELS_DIR" 2>/dev/null | tail -1 | tr -dc '0-9')
@@ -187,6 +204,40 @@ for sub, (repo, path) in MAP.items():
 PY
 ok "model ទាញយករួច"
 
+# ─── model វីដេអូ (LTX-Video 2B + T5) ──────────────────────────────────────
+if [ "$VIDEO_ENABLE" != "0" ]; then
+  say "🎬 ទាញយក model វីដេអូ LTX-Video 2B (~១១GB) — អាចយូរ ៥–១៥ នាទី"
+  if python3 - "$MODELS_DIR" "$VIDEO_CKPT_NAME" "$VIDEO_TE_NAME" <<'PY'
+import os, sys, shutil
+from huggingface_hub import hf_hub_download
+
+models_dir, ckpt_name, te_name = sys.argv[1:4]
+FILES = {
+    "checkpoints": ("Lightricks/LTX-Video", ckpt_name),
+    "text_encoders": ("comfyanonymous/flux_text_encoders", te_name),
+}
+for sub, (repo, name) in FILES.items():
+    dest = os.path.join(models_dir, sub)
+    os.makedirs(dest, exist_ok=True)
+    target = os.path.join(dest, name)
+    if os.path.exists(target) and os.path.getsize(target) > 10_000_000:
+        print("   ✓ មានស្រាប់:", name)
+        continue
+    print("   ⬇️  ", repo, name)
+    got = hf_hub_download(repo_id=repo, filename=name, local_dir=dest)
+    if os.path.abspath(got) != os.path.abspath(target):
+        shutil.move(got, target)
+    print("   ✅", name, round(os.path.getsize(target) / 1e9, 2), "GB")
+PY
+  then
+    VIDEO_MODEL_ENV="$VIDEO_CKPT_NAME"
+    VIDEO_CLIP_ENV="$VIDEO_TE_NAME"
+    ok "model វីដេអូ រួចរាល់"
+  else
+    warn "ទាញយក model វីដេអូមិនបាន — វីដេអូនឹងបិទ (រូបភាពនៅដំណើរការធម្មតា)"
+  fi
+fi
+
 # ComfyUI អាន model ពីខាងក្រៅ (មិន copy ១៧GB ចូល folder ComfyUI)
 cat > "$WORK/extra_model_paths.yaml" <<EOF
 buffy:
@@ -194,6 +245,7 @@ buffy:
   diffusion_models: diffusion_models
   text_encoders: text_encoders
   vae: vae
+  checkpoints: checkpoints
 EOF
 
 # ─── ៥/៥  បើក ComfyUI + Buffy server + tunnel ────────────────────────────────
@@ -240,6 +292,7 @@ python3 -m pip install -q fastapi uvicorn requests 2>&1 | tail -2 || die "pip in
 # គ្មាន ACCESS_KEY → website មិនត្រូវការ key អ្វីទាំងអស់
 IMAGE_BASE_URL="http://127.0.0.1:$COMFY_PORT" \
   IMAGE_MODEL="$DM_NAME" IMAGE_CLIP="$TE_NAME" IMAGE_VAE="$VA_NAME" \
+  VIDEO_MODEL="${VIDEO_MODEL_ENV}" VIDEO_CLIP="${VIDEO_CLIP_ENV}" \
   nohup python3 -m uvicorn local_app:app --host 127.0.0.1 --port "$PORT" \
   --log-level warning >"$WORK/ui.log" 2>&1 </dev/null &
 

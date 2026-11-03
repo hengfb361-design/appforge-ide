@@ -1036,16 +1036,24 @@ _AF_TOKEN_NAMES = ("GITHUB_TOKEN", "GH_TOKEN", "GITHUB_API", "GITHUB_API_KEY",
                    "Github_api", "Github_apiclassic")
 
 
-def _af_token() -> str:
+def _af_clean(value: str) -> str:
+    """Tokens never contain whitespace; a phone keyboard often adds some."""
+    return "".join((value or "").split())
+
+
+def _af_token_name() -> str:
     wanted = {n.lower() for n in _AF_TOKEN_NAMES}
     for name in _AF_TOKEN_NAMES:
-        value = (os.environ.get(name) or "").strip()
-        if value:
-            return value
+        if _af_clean(os.environ.get(name, "")):
+            return name
     for key, value in os.environ.items():
-        if key.lower() in wanted and (value or "").strip():
-            return value.strip()
+        if key.lower() in wanted and _af_clean(value):
+            return key
     return ""
+
+
+def _af_token() -> str:
+    return _af_clean(os.environ.get(_af_token_name(), ""))
 
 
 _AF_TOKEN = _af_token()  # kept for tests; endpoints re-read so a rotation works
@@ -1121,7 +1129,10 @@ def _af_files(payload) -> list:
 @app.get("/api/appforge/ready")
 def appforge_ready():
     """Lets the page hide the button instead of failing on click."""
-    return {"ok": True, "github": bool(_af_token()), "build": "v3"}
+    return {"ok": True, "github": bool(_af_token()), "build": "v4",
+            "token_var": _af_token_name(),
+            "env_names": sorted(k for k in os.environ
+                                if "GITHUB" in k.upper() or k.lower().startswith("gh"))}
 
 
 @app.post("/api/appforge/build")

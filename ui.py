@@ -346,6 +346,19 @@ PAGE = r"""<!doctype html>
     return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   }
 
+  /* A multi-MB data: URL pasted into innerHTML is slow to re-parse and mobile
+     Chrome will not seek inside it; a blob URL plays, seeks and downloads. */
+  function videoFromBase64(mime, b64) {
+    try {
+      const bin = atob(b64);
+      const buf = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+      return URL.createObjectURL(new Blob([buf], { type: mime }));
+    } catch (e) {
+      return "data:" + mime + ";base64," + b64;
+    }
+  }
+
   /* ---------------- persistence ---------------- */
   function save() {
     const data = JSON.stringify({
@@ -456,7 +469,9 @@ PAGE = r"""<!doctype html>
         "</div>";
     }
     if (m.video && m.video.url) {
-      html += '<div class="gen-video"><video src="' + esc(m.video.url) + '" controls loop playsinline></video>' +
+      // autoplay+muted: a phone will not start a silent tap-less playback
+      // otherwise, and the bubble just looks like a still picture.
+      html += '<div class="gen-video"><video src="' + esc(m.video.url) + '" controls loop playsinline muted autoplay preload="auto"></video>' +
         '<a href="' + esc(m.video.url) + '" download="buffy-ai.webm">⬇️ ទាញយកវីដេអូ</a></div>';
     }
     if (m.sources && m.sources.length) {
@@ -696,7 +711,8 @@ PAGE = r"""<!doctype html>
       }
       const secs = (Date.now() - t0) / 1000;
       if (d.status === "done" && d.data) {
-        aMsg.video = { url: "data:" + (d.mime || "video/webm") + ";base64," + d.data };
+        const mime = d.mime || "video/webm";
+        aMsg.video = { url: videoFromBase64(mime, d.data), mime };
         setStatus(aNode, null);
         paint();
         return;

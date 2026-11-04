@@ -1349,6 +1349,46 @@ async def appforge_build(request: Request):
         return JSONResponse({"detail": "ភ្ជាប់ GitHub មិនបាន: %s" % str(exc)[:120]}, status_code=502)
 
 
+def _af_run_progress(full: str, run: dict) -> dict:
+    """Build percentage from GitHub's own run/job step data.
+
+    The number never moves on a timer: it changes only when GitHub reports
+    another job step as completed, so a stalled build visibly stops instead of
+    pretending to advance.
+    """
+    status = (run.get("status") or "").lower()
+    if not status:
+        return {"progress": 5, "step": "កំពុងរង់ចាំ GitHub", "steps_done": 0, "steps_total": 0}
+    if status in ("queued", "requested", "waiting", "pending"):
+        return {"progress": 15, "step": "រង់ចាំ runner", "steps_done": 0, "steps_total": 0}
+
+    rows = []
+    try:
+        jobs = _gh("GET", "/repos/%s/actions/runs/%s/jobs" % (full, run.get("id")))
+        if jobs.status_code == 200:
+            rows = (jobs.json() or {}).get("jobs") or []
+    except requests.RequestException:
+        rows = []
+    total = done = 0
+    last_done, running = "", ""
+    for job in rows:
+        for step in job.get("steps") or []:
+            total += 1
+            name = step.get("name") or ""
+            st = (step.get("status") or "")
+            if st == "completed":
+                done += 1
+                last_done = name or last_done
+            elif st == "in_progress" and name:
+                running = running or name
+    pct = 20 + int(round(75.0 * done / total)) if total else 20
+    if status == "completed" and (run.get("conclusion") or "") == "success":
+        pct = 100
+    return {"progress": max(0, min(100, pct)),
+            "step": running or last_done or "កំពុង build",
+            "steps_done": done, "steps_total": total}
+
+
 @app.get("/api/appforge/status")
 def appforge_status(repo: str = ""):
     if not _af_token():
@@ -1363,7 +1403,9 @@ def appforge_status(repo: str = ""):
                                 status_code=502)
         items = (runs.json() or {}).get("workflow_runs") or []
         if not items:
-            return {"state": "starting", "repo": full, "run_url": ""}
+            return {"state": "starting", "repo": full, "run_url": "",
+                    "progress": 10, "step": "កំពុងបង្កើត build",
+                    "steps_done": 0, "steps_total": 0}
         run = items[0]
         status = run.get("status") or ""
         conclusion = run.get("conclusion") or ""
@@ -1383,6 +1425,7 @@ def appforge_status(repo: str = ""):
         return {
             "state": state, "status": status, "conclusion": conclusion,
             "run_url": run.get("html_url") or "", "apk_ready": apk_ready, "repo": full,
+            **_af_run_progress(full, run),
         }
     except requests.RequestException as exc:
         return JSONResponse({"state": "unknown", "detail": str(exc)[:120]}, status_code=502)

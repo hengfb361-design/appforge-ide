@@ -226,6 +226,11 @@ select.inp { appearance: none; background-image: linear-gradient(45deg, transpar
 .build-state { font-size: 11.5px; color: var(--text-dim); margin: 8px 0 0; line-height: 1.5; }
 .build-state.ok { color: var(--success); }
 .build-state.err { color: var(--error); }
+/* Real progress: the width only moves when GitHub reports a finished job step. */
+.build-bar { height: 5px; margin-top: 6px; border-radius: 3px; background: var(--panel-2); overflow: hidden; }
+.build-bar > i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .35s ease; }
+.build-bar.ok > i { background: var(--success); }
+.build-bar.err > i { background: var(--error); }
 .history { margin-top: 14px; border-top: 1px solid var(--border); padding-top: 8px; }
 .history-head { display: flex; justify-content: space-between; align-items: center; font-size: 11px; color: var(--text-dim); }
 .history ul { list-style: none; margin: 6px 0 0; padding: 0; font-size: 11.5px; }

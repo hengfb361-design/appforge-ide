@@ -432,7 +432,13 @@
       ? items.map((i) => '<div class="prob" data-file="' + esc(i.file) + '" data-line="' + (i.line || 0) + '">' +
           '<span class="err">✖ ' + esc(i.file) + (i.line ? ':' + i.line : '') + ' — ' + esc(i.message) + '</span></div>').join('')
       : '<span class="ok">✔ គ្មានបញ្ហា</span>';
-    $('#stBuild').textContent = items.length ? ('Problems: ' + items.length) : 'APK: ' + (state.build.last || '—');
+    // While a build runs the status bar should keep showing the live percent
+    // instead of resetting to "—" every time problems are re-rendered.
+    const live = state.build.busy && typeof state.build.pct === 'number'
+      ? state.build.pct + '%' : '';
+    $('#stBuild').textContent = items.length
+      ? ('Problems: ' + items.length)
+      : 'APK: ' + (state.build.busy ? (live || 'building') : (state.build.last || '—'));
   }
 
   /* ─────────────────────────────── files ops ───────────────────────────── */
@@ -899,9 +905,11 @@
     if (!check.ok) logLine('buildlog', check.issues.join('\n'), 'err');
 
     state.build.busy = true;
+    state.build.pct = null;
     $('#btnStartBuild').disabled = true;
     $('#buildState').textContent = '⏳ កំពុងបង្កើត repo និងបញ្ជូនឯកសារ…';
     $('#buildState').className = 'build-state';
+    setBuildProgress(null);
     try {
       const payload = {
         repo: (G.normalize({ name: cfg.name }).pkg.split('.').pop() || 'app') + '-apk-' + Date.now().toString(36),
@@ -939,6 +947,22 @@
     }
   }
 
+  function setBuildProgress(pct, cls) {
+    // Only ever called with a number the server read from GitHub, or null.
+    const bar = $('#buildBar');
+    const fill = $('#buildBarFill');
+    if (!bar || !fill) return;
+    if (typeof pct !== 'number' || !isFinite(pct)) {
+      bar.hidden = true;
+      bar.className = 'build-bar';
+      fill.style.width = '0%';
+      return;
+    }
+    bar.hidden = false;
+    bar.className = 'build-bar' + (cls ? ' ' + cls : '');
+    fill.style.width = Math.max(0, Math.min(100, pct)) + '%';
+  }
+
   async function pollBuild(start) {
     clearTimeout(state.build.timer);
     if (!state.build.repo) return;
@@ -946,27 +970,40 @@
       const r = await fetch('/api/appforge/status?repo=' + encodeURIComponent(state.build.repo));
       const s = await r.json().catch(() => ({ state: 'unknown' }));
       if (s.state === 'running' || s.state === 'starting') {
-        $('#buildState').textContent = '⏳ ' + (s.state === 'starting' ? 'ចាប់ផ្តើម…' : 'កំពុង build…') + ' (' + (s.status || '') + ')';
-        $('#stBuild').textContent = 'APK: building';
+        const pct = typeof s.progress === 'number' ? Math.round(s.progress) : null;
+        const parts = [pct === null
+          ? '⏳ ' + (s.state === 'starting' ? 'ចាប់ផ្តើម…' : 'កំពុង build…')
+          : '⏳ ' + pct + '%'];
+        if (s.step) parts.push(s.step);
+        if (s.steps_total) parts.push('(' + s.steps_done + '/' + s.steps_total + ' step)');
+        $('#buildState').textContent = parts.join(' · ');
+        state.build.pct = pct;
+        $('#stBuild').textContent = 'APK: ' + (pct === null ? 'building' : pct + '%');
+        setBuildProgress(pct);
         state.build.timer = setTimeout(pollBuild, start ? 6000 : 9000);
         return;
       }
       if (s.state === 'done') {
         $('#buildState').textContent = '✅ APK រួចរាល់ — ចុច "ទាញយក APK"';
         $('#buildState').className = 'build-state ok';
+        setBuildProgress(100, 'ok');
         const link = $('#apkLink');
         link.href = '/api/appforge/apk?repo=' + encodeURIComponent(state.build.repo);
         link.hidden = false;
         state.build.busy = false;
+        state.build.pct = null;
         state.build.last = 'ready';
         $('#btnStartBuild').disabled = false;
         setStatus('APK ready', 'ok');
         addHistory({ repo: state.build.repo, url: state.build.url, state: 'done', at: Date.now() });
         refreshLogs();
       } else if (s.state === 'failed') {
-        $('#buildState').textContent = '✖ Build បរាជ័យ — មើល Build log';
+        $('#buildState').textContent = '✖ Build បរាជ័យ — មើល Build log' +
+          (typeof s.progress === 'number' ? ' (នៅ ' + Math.round(s.progress) + '%)' : '');
         $('#buildState').className = 'build-state err';
+        setBuildProgress(typeof s.progress === 'number' ? Math.round(s.progress) : null, 'err');
         state.build.busy = false;
+        state.build.pct = null;
         state.build.last = 'failed';
         $('#btnStartBuild').disabled = false;
         setStatus('Build failed', 'err');

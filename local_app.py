@@ -1290,6 +1290,7 @@ def appforge_ready(request: Request):
     """
     out = {"ok": True, "github": bool(_af_token()), "build": "v7",
            "ide": True, "logs": True,
+           "cleanup": bool(_af_clean(os.environ.get("ADMIN_KEY", ""))),
            "token_var": _af_token_name(),
            "env_names": sorted(k for k in os.environ
                                if "GITHUB" in k.upper() or k.lower().startswith("gh"))}
@@ -1425,6 +1426,98 @@ def appforge_apk(repo: str = ""):
         )
     except (requests.RequestException, zipfile.BadZipFile) as exc:
         return JSONResponse({"detail": "បរាជ័យ: %s" % str(exc)[:120]}, status_code=502)
+
+
+_AF_BUILD_REPO = re.compile(r"^[a-z0-9][a-z0-9._-]{0,90}-apk-[a-z0-9]{4,13}$")
+
+
+class RepoRef(BaseModel):
+    repo: str = ""
+
+
+def _af_admin_error(request: Request):
+    """None when the caller proved admin rights, else the refusal response.
+
+    Cleanup deletes repositories with the owner's token, so it must never be
+    callable by a random visitor of this public site: without ADMIN_KEY set the
+    feature stays off instead of exposing the token's write power.
+    """
+    want = _af_clean(os.environ.get("ADMIN_KEY", ""))
+    if not want:
+        return JSONResponse(
+            {"detail": "Server មិនមាន ADMIN_KEY — បន្ថែមនៅ Render → Environment រួច deploy ម្តងទៀត។"},
+            status_code=503)
+    if len(want) < 8:
+        return JSONResponse({"detail": "ADMIN_KEY ខ្លីពេក — ត្រូវមានយ៉ាងតិច ៨ តួ"}, status_code=503)
+    got = _af_clean(request.headers.get("x-admin-key", ""))
+    if not got or not hmac.compare_digest(got, want):
+        return JSONResponse({"detail": "ADMIN_KEY មិនត្រឹមត្រូវ"}, status_code=401)
+    return None
+
+
+@app.get("/api/appforge/repositories")
+def appforge_repositories(request: Request):
+    """The repos this app created (build-shaped names), newest first."""
+    refused = _af_admin_error(request)
+    if refused is not None:
+        return refused
+    if not _af_token():
+        return JSONResponse({"detail": "Server មិនមាន GITHUB_TOKEN"}, status_code=503)
+    try:
+        me = _gh("GET", "/user")
+        if me.status_code != 200:
+            return JSONResponse({"detail": "GitHub token មិនត្រឹមត្រូវ (%s)" % _gh_msg(me)}, status_code=502)
+        login = ((me.json() or {}).get("login") or "")
+        repos = _gh("GET", "/user/repos?per_page=100&affiliation=owner&sort=created&direction=desc")
+        if repos.status_code != 200:
+            return JSONResponse({"detail": "GitHub %s: %s" % (repos.status_code, _gh_msg(repos))},
+                                status_code=502)
+        items = []
+        for repo in repos.json() or []:
+            name = (repo.get("name") or "").lower()
+            if not _AF_BUILD_REPO.match(name):
+                continue
+            items.append({
+                "repo": "%s/%s" % (login or repo.get("owner", {}).get("login", ""), name),
+                "url": repo.get("html_url") or "",
+                "created": repo.get("created_at") or "",
+                "private": bool(repo.get("private")),
+            })
+        return {"ok": True, "owner": login, "repositories": items}
+    except requests.RequestException as exc:
+        return JSONResponse({"detail": "ភ្ជាប់ GitHub មិនបាន: %s" % str(exc)[:120]}, status_code=502)
+
+
+@app.post("/api/appforge/repository/delete")
+def appforge_repository_delete(request: Request, ref: RepoRef):
+    """Delete one build repo. Refuses anything the build flow did not name."""
+    refused = _af_admin_error(request)
+    if refused is not None:
+        return refused
+    if not _af_token():
+        return JSONResponse({"detail": "Server មិនមាន GITHUB_TOKEN"}, status_code=503)
+    parts = [p for p in (ref.repo or "").strip().split("/")]
+    if len(parts) != 2 or not all(parts):
+        return JSONResponse({"detail": "ទម្រង់ត្រូវជា owner/name"}, status_code=400)
+    owner, name = parts[0], parts[1].lower()
+    if not _AF_BUILD_REPO.match(name):
+        return JSONResponse(
+            {"detail": "បដិសេធ: repo នេះមិនមានឈ្មោះបែប build (<pkg>-apk-<ពេលវេលា>) ទេ"},
+            status_code=400)
+    try:
+        me = _gh("GET", "/user")
+        if me.status_code != 200:
+            return JSONResponse({"detail": "GitHub token មិនត្រឹមត្រូវ (%s)" % _gh_msg(me)}, status_code=502)
+        login = ((me.json() or {}).get("login") or "")
+        if not login or owner.lower() != login.lower():
+            return JSONResponse({"detail": "បដិសេធ: repo នេះមិនមែនជារបស់គណនី token ទេ"}, status_code=400)
+        out = _gh("DELETE", "/repos/%s/%s" % (owner, name))
+        if out.status_code not in (202, 204):
+            return JSONResponse({"detail": "GitHub %s: %s" % (out.status_code, _gh_msg(out))},
+                                status_code=502)
+        return {"ok": True, "deleted": "%s/%s" % (owner, name)}
+    except requests.RequestException as exc:
+        return JSONResponse({"detail": "ភ្ជាប់ GitHub មិនបាន: %s" % str(exc)[:120]}, status_code=502)
 
 
 def _appforge_page() -> str:

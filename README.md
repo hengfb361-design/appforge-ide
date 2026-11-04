@@ -234,6 +234,19 @@ Root `/` ឥឡូវជា IDE ពេញលេញ (មិនមែន form ត�
 3. ឯកសារ web ចូល `app/src/main/assets/www/`; ឯកសារ Gradle/Java/Kotlin (`app/src/main/...`, `build.gradle`, `.github/...`) ជំនួសឯកសារដែលបង្កើតស្រាប់ → Gradle compile ពិត
 4. GitHub Actions បង្កើត `app-debug.apk` → ចុច **ទាញយក APK**
 
+### លុប repo សាកល្បង (ស្រេចចិត្ត)
+
+ការសាក build នីមួយៗបង្កើត repo ថ្មី `<package>-apk-<ពេលវេលា>` ។ ដើម្បីសម្អាត៖
+
+1. Render → **Environment** → បន្ថែម `ADMIN_KEY` = ខ្សែអក្សរចៃដន្យយ៉ាងតិច ៨ តួ (មិនត្រូវ commit ឡើយ)
+2. IDE → Build panel → **🗑 លុប repo សាកល្បង** → ដាក់ `ADMIN_KEY` → **🔄 រាយ repo**
+3. ធីក repo ដែលចង់លុប → **🗑 លុបដែលជ្រើស**
+
+- គ្មាន `ADMIN_KEY` → endpoint ឆ្លើយ `503` និងប៊ូតុងលាក់ (គេហទំព័រសាធារណៈលុបអ្វីមិនបាន)
+- បដិសេធគ្រប់ repo ដែលមិនមានឈ្មោះបែប build ឬមិនមែនជារបស់គណនី token (ឧ. `appforge-ide` លុបមិនបាន)
+- `GET /api/appforge/repositories` និង `POST /api/appforge/repository/delete` ត្រូវការ header `X-Admin-Key`
+- `GET /api/appforge/ready?scopes=1` បង្ហាញ scope របស់ token (មិនបង្ហាញតម្លៃ token) ដើម្បីផ្ទៀងផ្ទាត់
+
 ### សុវត្ថិភាព និងដែនកំណត់
 
 - Project នីមួយៗមាន id + key ចៃដន្យ; គ្រប់ API ត្រូវការ `X-Project-Key`

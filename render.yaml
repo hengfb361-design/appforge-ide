@@ -23,3 +23,8 @@ services:
       # Never commit it: the APK builder reads it server-side only.
       - key: GITHUB_TOKEN
         sync: false
+      # Optional: only needed for the "delete test repos" tool. When unset the
+      # endpoint returns 503, so a public deployment cannot delete anything.
+      # Set it in Environment as a long random string (min 8 characters).
+      - key: ADMIN_KEY
+        sync: false

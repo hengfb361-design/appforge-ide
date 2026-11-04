@@ -1005,6 +1005,84 @@
     renderHistory();
   }
 
+  function adminHeaders() {
+    return { 'Content-Type': 'application/json', 'X-Admin-Key': ($('#adminKey').value || '').trim() };
+  }
+
+  async function readJson(r) {
+    // A proxy can cut a long response; never surface "Unexpected end of JSON".
+    const raw = await r.text();
+    let data = {};
+    try { data = raw ? JSON.parse(raw) : {}; } catch (e) { data = {}; }
+    if (!r.ok) {
+      throw new Error(data.detail || ('Server ' + r.status +
+        (raw ? ': ' + raw.slice(0, 140) : ' — មិនបានឆ្លើយតប')));
+    }
+    return data;
+  }
+
+  async function listBuildRepos() {
+    const list = $('#cleanupList');
+    list.innerHTML = '';
+    $('#btnDeleteRepos').hidden = true;
+    if (!(($('#adminKey').value || '').trim())) return toast('ដាក់ ADMIN_KEY សិន', 'err');
+    try {
+      const data = await readJson(await fetch('/api/appforge/repositories', { headers: adminHeaders() }));
+      const repos = data.repositories || [];
+      if (!repos.length) {
+        list.innerHTML = '<li class="hint">គ្មាន repo សាកល្បងទេ</li>';
+        return;
+      }
+      repos.forEach((repo) => {
+        const li = document.createElement('li');
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.className = 'pick';
+        cb.value = repo.repo;
+        const a = document.createElement('a');
+        a.href = repo.url || '#';
+        a.target = '_blank';
+        a.rel = 'noopener';
+        a.textContent = repo.repo;
+        const when = document.createElement('span');
+        when.textContent = repo.created ? new Date(repo.created).toLocaleDateString() : '';
+        li.append(cb, a, when);
+        list.appendChild(li);
+      });
+      $('#btnDeleteRepos').hidden = false;
+    } catch (err) {
+      toast(err.message, 'err');
+      list.innerHTML = '';
+      const li = document.createElement('li');
+      li.className = 'hint';
+      li.textContent = err.message;
+      list.appendChild(li);
+    }
+  }
+
+  async function deleteSelectedRepos() {
+    const picked = $$('#cleanupList input.pick:checked').map((cb) => cb.value);
+    if (!picked.length) return toast('ជ្រើស repo សិន', 'err');
+    const ok = confirm('លុប ' + picked.length + ' repo?\n\n' + picked.join('\n') +
+      '\n\nសកម្មភាពនេះមិនអាចត្រឡប់វិញបានទេ។');
+    if (!ok) return;
+    const failed = [];
+    for (const repo of picked) {
+      try {
+        await readJson(await fetch('/api/appforge/repository/delete', {
+          method: 'POST', headers: adminHeaders(), body: JSON.stringify({ repo: repo })
+        }));
+      } catch (err) {
+        failed.push(repo + ' — ' + err.message);
+      }
+    }
+    const gone = picked.length - failed.length;
+    toast('លុបរួច ' + gone + '/' + picked.length, failed.length ? 'err' : 'ok');
+    if (failed.length) logLine('buildlog', failed.join('\n'), 'err');
+    listBuildRepos();
+    renderHistory();
+  }
+
   function renderHistory() {
     $('#buildHistory').innerHTML = state.history.map((h) =>
       '<li><b>' + esc(h.repo) + '</b><span>' + new Date(h.at).toLocaleString() +
@@ -1060,6 +1138,8 @@
         pill.className = 'pill bad';
         $('#buildState').textContent = 'Server គ្មាន GITHUB_TOKEN — build APK មិនអាចចាប់ផ្ដើម (ZIP/Export នៅប្រើបាន)។';
       }
+      // The cleanup tool needs ADMIN_KEY on the server; hide it when absent.
+      if (d.cleanup === false) $('#btnCleanup').hidden = true;
     } catch (e) { /* offline */ }
   }
 
@@ -1101,7 +1181,10 @@
       deleteProject: '🗑 លុបគម្រោងនេះ', classic: 'ប្រអប់បង្កើត App បែបចាស់ →', chat: 'Buffy Chat →',
       preview: 'Live Preview', problems: 'បញ្ហា', output: 'Output', buildLog: 'Build log',
       cancel: 'បោះបង់', ok: 'យល់ព្រម', downloadFile: '⬇ ឯកសារនេះ', replace: 'ជំនួស',
-      replaceAll: 'ជំនួសទាំងអស់', templates: '🧩 Template'
+      replaceAll: 'ជំនួសទាំងអស់', templates: '🧩 Template',
+      cleanupRepos: '🗑 លុប repo សាកល្បង', listRepos: '🔄 រាយ repo សាកល្បង',
+      deleteSelected: '🗑 លុបដែលជ្រើស',
+      cleanupHint: 'លុបបានតែ repo ឈ្មោះ <pkg>-apk-<ពេលវេលា>។ ត្រូវការ ADMIN_KEY នៅ server។'
     } : {
       newProject: '＋ New', import: '⬆ Import', export: '⬇ ZIP', run: '▶ Run', buildApk: '🤖 Build APK',
       explorer: 'Explorer', search: 'Search', buildTitle: 'Build APK', appName: 'App name',
@@ -1115,7 +1198,10 @@
       deleteProject: '🗑 Delete this project', classic: 'Classic app builder →', chat: 'Buffy Chat →',
       preview: 'Live Preview', problems: 'Problems', output: 'Output', buildLog: 'Build log',
       cancel: 'Cancel', ok: 'OK', downloadFile: '⬇ This file', replace: 'Replace',
-      replaceAll: 'Replace all', templates: '🧩 Templates'
+      replaceAll: 'Replace all', templates: '🧩 Templates',
+      cleanupRepos: '🗑 Delete test repos', listRepos: '🔄 List test repos',
+      deleteSelected: '🗑 Delete selected',
+      cleanupHint: 'Only repos named <pkg>-apk-<time> can be deleted. Needs ADMIN_KEY on the server.'
     };
     $$('[data-i18n]').forEach((el) => {
       const key = el.getAttribute('data-i18n');
@@ -1308,6 +1394,14 @@
       try { localStorage.removeItem(LS.history); } catch (e) {}
       renderHistory();
     });
+    // cleanup of build repos — the key never leaves this page's memory
+    $('#btnCleanup').addEventListener('click', () => {
+      const box = $('#cleanupBox');
+      box.hidden = !box.hidden;
+      if (!box.hidden) $('#adminKey').focus();
+    });
+    $('#btnListRepos').addEventListener('click', listBuildRepos);
+    $('#btnDeleteRepos').addEventListener('click', deleteSelectedRepos);
     $('#bMode').addEventListener('change', () => {
       $('#bUrl').hidden = $('#bMode').value !== 'online';
     });

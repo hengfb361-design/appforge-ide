@@ -233,6 +233,16 @@ select.inp { appearance: none; background-image: linear-gradient(45deg, transpar
 .history li b { display: block; font-weight: 600; color: var(--text); word-break: break-all; }
 .history li span { color: var(--text-dim); }
 
+.cleanup { margin-top: 12px; border-top: 1px solid var(--border); padding-top: 8px; }
+.cleanup-box { margin-top: 6px; }
+.cleanup .inp { margin-top: 6px; }
+.cleanup-list { list-style: none; margin: 6px 0 0; padding: 0; font-size: 11.5px; max-height: 170px; overflow: auto; }
+.cleanup-list li { display: flex; gap: 6px; align-items: center; padding: 5px 6px; border-radius: 5px; background: var(--panel); margin-bottom: 4px; }
+.cleanup-list li a { flex: 1; color: var(--text); text-decoration: none; word-break: break-all; }
+.cleanup-list li a:hover { text-decoration: underline; }
+.cleanup-list li span { color: var(--text-dim); font-size: 10.5px; white-space: nowrap; }
+.cleanup-list li.hint { display: block; background: none; }
+
 /* ───────────────────────────── editor ─────────────────────────── */
 .main { flex: 1 1 auto; display: flex; flex-direction: column; min-width: 0; background: var(--editor); }
 .tabs { flex: 0 0 auto; display: flex; gap: 1px; overflow-x: auto; background: var(--bg-2); border-bottom: 1px solid var(--border); scrollbar-width: none; }

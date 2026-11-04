@@ -205,3 +205,55 @@ Project នេះមិនកំណត់បំពាន (jailbreak) ដើម�
 ## License
 
 MIT
+
+## AppForge IDE (ថ្មី — IDE ក្នុង browser)
+
+Root `/` ឥឡូវជា IDE ពេញលេញ (មិនមែន form តែមួយទេ)។ ទំព័រចាស់ៗនៅដដែល៖
+
+| URL | អ្វី |
+|---|---|
+| `/` | **AppForge IDE** — file explorer, editor, live preview, build APK |
+| `/appforge/` | ប្រអប់បង្កើត App បែបចាស់ (នៅដំណើរការដូចដើម) |
+| `/buffy` | Buffy Chat ចាស់ |
+| `/api/appforge/*` | build/status/apk/logs ដូចមុន (បន្ថែម `logs`) |
+| `/api/ide/*` | project storage ថ្មី (create/list/file/asset/move/delete/mkdir/zip/import) |
+| `/p/{project}/{key}/...` | ឯកសារសម្រាប់ sandboxed preview iframe |
+
+### មុខងារ
+
+- **File explorer**: បង្កើត/ប្តូរ​ឈ្មោះ/លុប ឯកសារ និងថត, upload រូប/asset, ទាញយកឯកសារមួយ, export ZIP, import ZIP
+- **Editor**: លេខបន្ទាត់, syntax highlight (HTML/CSS/JS/JSON/XML/Java/Kotlin/Python/PHP/MD), auto-indent, bracket ស្វ័យប្រវត្តិ, Find/Replace, tabs ច្រើន, auto-save, Ctrl+S / Ctrl+F / Ctrl+P
+- **Live preview**: iframe បំបែក (sandbox), index.html ជាចំណុចចាប់ផ្តើម, CSS/JS/រូប ផ្ទុកដោយខ្លួនឯង, បង្ហាញ JS error ក្នុង Problems, បិទ/បើក Desktop និង Mobile
+- **Build APK**: ឈ្មោះ, package, version, icon (បង្កើត mipmap គ្រប់ទំហំ), permissions, orientation, offline/online
+- **Templates**: Blank, Landing, Notes, Android (Kotlin) — បង្កើត project ថ្មីបានភ្លាម
+
+### របៀប build APK ពី IDE
+
+1. ដាក់ `GITHUB_TOKEN` ក្នុង Render → Environment (មិនត្រូវ commit ឡើយ)
+2. សរសេរកូដ → ចុច **🤖 Build APK**
+3. ឯកសារ web ចូល `app/src/main/assets/www/`; ឯកសារ Gradle/Java/Kotlin (`app/src/main/...`, `build.gradle`, `.github/...`) ជំនួសឯកសារដែលបង្កើតស្រាប់ → Gradle compile ពិត
+4. GitHub Actions បង្កើត `app-debug.apk` → ចុច **ទាញយក APK**
+
+### សុវត្ថិភាព និងដែនកំណត់
+
+- Project នីមួយៗមាន id + key ចៃដន្យ; គ្រប់ API ត្រូវការ `X-Project-Key`
+- Path ត្រូវបានពិនិត្យពីរដង (textual + realpath) — ការពារ `..`, absolute path, `\`, តួអក្សរហាម
+- ZIP import បដិសេធ symlink, traversal, ឯកសារធំ, ចំនួនច្រើនពេក
+- ដែនកំណត់: 2MB/ឯកសារ, 5MB/asset, 40MB/project, 400 ឯកសារ, 16MB/ZIP
+- ទិន្នន័យរក្សាក្នុង `IDE_DATA_DIR` (លំនាំ `/tmp/appforge-ide` — បាត់ពេល Render restart); browser រក្សា snapshot ដើម្បីបង្កើតឡើងវិញ
+
+### Deploy ទៅ Render
+
+```bash
+# ជម្រើស ១: Blueprint (render.yaml)
+# New + → Blueprint → ជ្រើស repo → បន្ថែម GITHUB_TOKEN
+
+# ជម្រើស ២: Web Service ដោយដៃ
+# Runtime: Python 3.12
+# Build:  pip install -r requirements.txt
+# Start:  uvicorn local_app:app --host 0.0.0.0 --port $PORT
+# Health: /api/health
+```
+
+> IDE ត្រូវការ Python server (មិនមែន static site ទេ) ព្រោះ preview, project storage
+> និង build proxy រត់លើ FastAPI។ `/appforge/` តែម្នាក់ឯងនៅជា static បាន។

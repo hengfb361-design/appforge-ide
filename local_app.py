@@ -28,10 +28,16 @@ the server, so the public page never receives it.
 """
 
 import base64
+import hashlib
 import hmac
 import io
 import json
+import mimetypes
 import os
+import re
+import secrets
+import shutil
+import tempfile
 import threading
 import time
 import traceback
@@ -47,6 +53,7 @@ from pydantic import BaseModel
 from typing import List
 
 from ui import PAGE
+from ide_store import router as ide_router
 
 LLAMA_URL = os.environ.get("LLAMA_URL", "http://127.0.0.1:11434").rstrip("/")
 LOCAL_MODEL = os.environ.get("LOCAL_MODEL", "buffy-coder")
@@ -199,6 +206,9 @@ SYSTEM_INSTRUCTION = (
 )
 
 app = FastAPI(title="Buffy AI (local)")
+# The IDE's project storage: create/read/write/move/delete, ZIP in-out and the
+# sandboxed preview route. Mounted here so / and /api live on one service.
+app.include_router(ide_router)
 
 # AppForge (the Android app builder in app-forge/public) is plain static files,
 # so it rides on this service instead of needing a second Render deploy.
@@ -1060,8 +1070,9 @@ _AF_TOKEN = _af_token()  # kept for tests; endpoints re-read so a rotation works
 _AF_API = "https://api.github.com"
 _AF_HITS = {}
 _AF_LOCK = threading.Lock()
-_AF_MAX_FILES = 80
-_AF_MAX_BYTES = 900_000
+_AF_MAX_FILES = 500
+_AF_MAX_BYTES = 12_000_000
+_AF_MAX_FILE = 5_000_000
 
 
 def _gh_msg(resp) -> str:
@@ -1124,21 +1135,32 @@ def _af_files(payload) -> list:
         if not isinstance(item, dict):
             raise ValueError("ឯកសារមិនត្រឹមត្រូវ")
         path = str(item.get("path") or "").strip().lstrip("/")
-        text = item.get("text")
         if (not path or ".." in path or "\\" in path or len(path) > 200
-                or not isinstance(text, str)):
+                or "\x00" in path):
             raise ValueError("ឯកសារមិនត្រឹមត្រូវ: " + str(item.get("path"))[:60])
-        total += len(text.encode("utf-8"))
+        if isinstance(item.get("b64"), str):
+            try:
+                data = base64.b64decode(item["b64"], validate=True)
+            except Exception:
+                raise ValueError("binary មិនត្រឹមត្រូវ: " + path)
+        elif isinstance(item.get("text"), str):
+            data = item["text"].encode("utf-8")
+        else:
+            raise ValueError("ឯកសារគ្មានមាតិកា: " + path)
+        if len(data) > _AF_MAX_FILE:
+            raise ValueError("ឯកសារធំពេក: " + path)
+        total += len(data)
         if total > _AF_MAX_BYTES:
             raise ValueError("ឯកសារធំពេក")
-        out.append((path, text))
+        out.append((path, data))
     return out
 
 
 @app.get("/api/appforge/ready")
 def appforge_ready():
     """Lets the page hide the button instead of failing on click."""
-    return {"ok": True, "github": bool(_af_token()), "build": "v5",
+    return {"ok": True, "github": bool(_af_token()), "build": "v6",
+            "ide": True, "logs": True,
             "token_var": _af_token_name(),
             "env_names": sorted(k for k in os.environ
                                 if "GITHUB" in k.upper() or k.lower().startswith("gh"))}
@@ -1184,10 +1206,10 @@ async def appforge_build(request: Request):
                 status_code=502,
             )
         full = owner + "/" + name
-        for path, text in files:
+        for path, data in files:
             put = _gh("PUT", "/repos/%s/contents/%s" % (full, path), {
                 "message": "Add " + path,
-                "content": base64.b64encode(text.encode("utf-8")).decode("ascii"),
+                "content": base64.b64encode(data).decode("ascii"),
                 "branch": "main",
             })
             if put.status_code not in (200, 201):
@@ -1281,15 +1303,19 @@ def appforge_apk(repo: str = ""):
 
 
 def _appforge_page() -> str:
-    """AppForge's index.html, with its asset URLs made absolute for "/"."""
-    try:
-        with open(os.path.join(_APPFORGE_DIR, "index.html"), "r", encoding="utf-8") as fh:
-            html = fh.read()
-    except OSError:
-        return ('<!doctype html><meta charset="utf-8"><title>AppForge</title>'
-                '<p>AppForge: <a href="/appforge/">/appforge/</a></p>')
-    return (html.replace('href="./', 'href="/appforge/')
-                .replace('src="./', 'src="/appforge/'))
+    """The IDE page; served from "/" with a <base> so relative URLs resolve."""
+    for rel in (os.path.join("ide", "index.html"), "index.html"):
+        try:
+            with open(os.path.join(_APPFORGE_DIR, rel), "r", encoding="utf-8") as fh:
+                html = fh.read()
+        except OSError:
+            continue
+        if rel.startswith("ide"):
+            # One <base> fixes every relative URL, including ../gen.js.
+            html = html.replace("<head>", '<head>\n<base href="/appforge/ide/" />', 1)
+        return html
+    return ('<!doctype html><meta charset="utf-8"><title>AppForge</title>'
+            '<p>AppForge: <a href="/appforge/">/appforge/</a></p>')
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -1297,6 +1323,55 @@ def index():
     """The landing page is AppForge now; the old chat UI lives at /buffy."""
     return HTMLResponse(_appforge_page(),
                         headers={"Cache-Control": "no-store, max-age=0"})
+
+
+@app.get("/api/appforge/logs")
+def appforge_logs(repo: str = ""):
+    """Recent build log lines so the IDE can show why a build failed."""
+    if not _af_token():
+        return JSONResponse({"detail": "Server មិនមាន GITHUB_TOKEN"}, status_code=503)
+    full = _af_slug(repo)
+    if not full:
+        return JSONResponse({"detail": "repo មិនត្រឹមត្រូវ"}, status_code=400)
+    try:
+        runs = _gh("GET", "/repos/%s/actions/runs?per_page=1" % full)
+        items = ((runs.json() or {}).get("workflow_runs") or []) if runs.status_code == 200 else []
+        if not items:
+            return {"ok": True, "logs": "មិនទាន់មាន build", "state": "starting"}
+        run = items[0]
+        jobs = _gh("GET", "/repos/%s/actions/runs/%s/jobs" % (full, run.get("id")))
+        steps, lines = [], []
+        for job in ((jobs.json() or {}).get("jobs") or []) if jobs.status_code == 200 else []:
+            lines.append("▸ %s — %s" % (job.get("name"), job.get("conclusion") or job.get("status")))
+            for step in job.get("steps") or []:
+                steps.append({"name": step.get("name"), "status": step.get("status"),
+                              "conclusion": step.get("conclusion")})
+                lines.append("  %s %s" % (step.get("conclusion") or step.get("status"),
+                                         step.get("name")))
+        text, note = "", ""
+        log_url = "/repos/%s/actions/runs/%s/logs" % (full, run.get("id"))
+        try:
+            logs = _gh("GET", log_url.replace("/repos", ""))
+            if logs.status_code == 200:
+                try:
+                    bundle = zipfile.ZipFile(io.BytesIO(logs.content))
+                    chunks = []
+                    for name in bundle.namelist():
+                        chunks.append("--- " + name + " ---")
+                        chunks.append(bundle.read(name).decode("utf-8", "replace"))
+                    text = "\n".join(chunks)
+                except zipfile.BadZipFile:
+                    text = logs.text
+            else:
+                note = "log មិនទាន់រួចរាល់ (GitHub %s)" % logs.status_code
+        except requests.RequestException as exc:
+            note = str(exc)[:120]
+        return {"ok": True, "state": "running" if run.get("status") != "completed" else "done",
+                "conclusion": run.get("conclusion") or "", "steps": steps,
+                "logs": (text or "\n".join(lines))[-20000:], "note": note,
+                "run_url": run.get("html_url") or ""}
+    except requests.RequestException as exc:
+        return JSONResponse({"detail": str(exc)[:120]}, status_code=502)
 
 
 @app.get("/buffy", response_class=HTMLResponse)

@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="km" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>AppForge IDE — Android App Studio</title>
+<meta name="description" content="IDE ក្នុង browser សម្រាប់សរសេរ HTML/CSS/JS/Java/Kotlin, មើលជាមុន និង build APK ពិតតាម GitHub Actions" />
+<meta name="theme-color" content="#0D1117" />
+<link rel="stylesheet" href="./ide.css" />
+</head>
+<body>
+
+<div class="app" id="app">
+
+  <!-- ─────────────────────────── title bar ─────────────────────────── -->
+  <header class="titlebar">
+    <div class="brand">
+      <span class="logo">⚡</span>
+      <div class="brand-text">
+        <b>AppForge <span class="ide-tag">IDE</span></b>
+        <small id="projLabel">—</small>
+      </div>
+    </div>
+
+    <div class="tb-actions">
+      <button id="btnNew" class="tb" data-i18n="newProject">＋ ថ្មី</button>
+      <button id="btnImport" class="tb" data-i18n="import">⬆ Import</button>
+      <button id="btnExport" class="tb" data-i18n="export">⬇ ZIP</button>
+      <button id="btnRun" class="tb primary" data-i18n="run">▶ Run</button>
+      <button id="btnBuild" class="tb accent" data-i18n="buildApk">🤖 Build APK</button>
+      <span class="tb-sep"></span>
+      <button id="btnTheme" class="tb icon" title="Theme" aria-label="Theme">🌙</button>
+      <button id="btnLang" class="tb icon" title="Language" aria-label="Language">KM</button>
+      <button id="btnHelp" class="tb icon" title="Help" aria-label="Help">?</button>
+    </div>
+  </header>
+
+  <div class="body">
+
+    <!-- ───────────────────────── activity bar ──────────────────────── -->
+    <nav class="activity" aria-label="Panels">
+      <button class="act on" data-panel="explorer" title="Explorer"><span class="ai">🗂</span><span class="al">Files</span></button>
+      <button class="act" data-panel="search" title="Search"><span class="ai">🔍</span><span class="al">Search</span></button>
+      <button class="act" data-panel="build" title="Build"><span class="ai">🤖</span><span class="al">Build</span></button>
+      <button class="act" data-panel="settings" title="Settings"><span class="ai">⚙</span><span class="al">Settings</span></button>
+      <div class="act-spacer"></div>
+      <button class="act" id="btnPreviewToggle" title="Preview"><span class="ai">👁</span><span class="al">Preview</span></button>
+    </nav>
+
+    <!-- ──────────────────────────── sidebar ────────────────────────── -->
+    <aside class="sidebar" id="sidebar">
+
+      <section class="panel on" id="panel-explorer">
+        <div class="panel-head">
+          <b data-i18n="explorer">Explorer</b>
+          <div class="ph-icons">
+            <button id="btnNewFile" title="New file">📄<span class="plus">+</span></button>
+            <button id="btnNewFolder" title="New folder">📁<span class="plus">+</span></button>
+            <button id="btnUpload" title="Upload files">⬆</button>
+            <button id="btnRefresh" title="Refresh">⟳</button>
+          </div>
+        </div>
+        <div class="project-chip">
+          <input id="projName" class="proj-name" value="គម្រោងថ្មី" maxlength="60" aria-label="Project name" />
+          <span class="dot" id="saveDot" title="Saved">●</span>
+        </div>
+        <div class="tree" id="tree" role="tree" aria-label="Project files"></div>
+        <div class="side-foot">
+          <span id="fileStats">0 files</span>
+          <button id="btnDownloadFile" class="link" data-i18n="downloadFile">⬇ ឯកសារនេះ</button>
+        </div>
+      </section>
+
+      <section class="panel" id="panel-search">
+        <div class="panel-head"><b data-i18n="search">Search</b></div>
+        <div class="pad">
+          <input id="searchInput" class="inp" placeholder="រកក្នុងគម្រោង…" />
+          <div class="row2">
+            <input id="searchReplace" class="inp" placeholder="ជំនួសដោយ…" />
+            <button id="btnReplaceAll" class="btn sm" data-i18n="replaceAll">ជំនួសទាំងអស់</button>
+          </div>
+          <p class="hint" id="searchHint">វាយពាក្យ ដើម្បីរកគ្រប់ឯកសារ</p>
+          <div id="searchResults" class="results"></div>
+        </div>
+      </section>
+
+      <section class="panel" id="panel-build">
+        <div class="panel-head"><b data-i18n="buildTitle">Build APK</b><span class="pill" id="tokenPill">—</span></div>
+        <div class="pad build-form">
+          <label class="lbl" data-i18n="appName">ឈ្មោះ App</label>
+          <input id="bName" class="inp" maxlength="40" placeholder="ហាងខ្ញុំ" />
+
+          <label class="lbl">Package name</label>
+          <input id="bPkg" class="inp" placeholder="com.example.myapp" />
+
+          <div class="row2">
+            <div>
+              <label class="lbl" data-i18n="versionName">Version</label>
+              <input id="bVersion" class="inp" value="1.0" maxlength="20" />
+            </div>
+            <div>
+              <label class="lbl" data-i18n="versionCode">Build</label>
+              <input id="bCode" class="inp" type="number" min="1" value="1" />
+            </div>
+          </div>
+
+          <label class="lbl" data-i18n="mode">របៀបដំណើរការ</label>
+          <select id="bMode" class="inp">
+            <option value="offline" data-i18n="offline">Offline — ឯកសារក្នុង App</option>
+            <option value="online" data-i18n="online">Online — បើក URL</option>
+          </select>
+          <input id="bUrl" class="inp" placeholder="https://example.com" hidden />
+
+          <label class="lbl" data-i18n="orientation">ទិសអេក្រង់</label>
+          <select id="bOrientation" class="inp">
+            <option value="unspecified" data-i18n="autoRotate">ស្វ័យប្រវត្តិ</option>
+            <option value="portrait" data-i18n="portrait">ឈរ (Portrait)</option>
+            <option value="landscape" data-i18n="landscape">ដេក (Landscape)</option>
+          </select>
+
+          <label class="lbl" data-i18n="permissions">Permissions</label>
+          <div class="perms" id="perms">
+            <label><input type="checkbox" value="INTERNET" checked /> Internet</label>
+            <label><input type="checkbox" value="CAMERA" /> Camera</label>
+            <label><input type="checkbox" value="RECORD_AUDIO" /> Microphone</label>
+            <label><input type="checkbox" value="ACCESS_FINE_LOCATION" /> Location</label>
+            <label><input type="checkbox" value="POST_NOTIFICATIONS" /> Notifications</label>
+            <label><input type="checkbox" value="VIBRATE" checked /> Vibrate</label>
+            <label><input type="checkbox" value="READ_MEDIA_IMAGES" /> Photos</label>
+            <label><input type="checkbox" value="WRITE_EXTERNAL_STORAGE" /> Storage</label>
+          </div>
+
+          <label class="lbl" data-i18n="appIcon">App Icon (PNG)</label>
+          <div class="icon-row">
+            <img id="iconPreview" class="icon-prev" alt="icon" hidden />
+            <input id="iconInput" type="file" accept="image/png,image/jpeg,image/webp" />
+            <button id="iconClear" class="link" data-i18n="clearIcon">យកចេញ</button>
+          </div>
+
+          <div class="build-actions">
+            <button id="btnStartBuild" class="btn primary block" data-i18n="buildApk">🤖 Build APK</button>
+            <button id="btnRefreshLog" class="btn block" data-i18n="viewLog">📜 មើល Log</button>
+            <a id="apkLink" class="btn success block" hidden download>⬇ ទាញយក APK</a>
+            <a id="repoLink" class="link" target="_blank" rel="noopener" hidden>បើក repo នៅ GitHub ↗</a>
+          </div>
+          <p class="build-state" id="buildState" data-i18n="buildIdle">មិនទាន់ build</p>
+          <div class="history">
+            <div class="history-head"><b data-i18n="history">ប្រវត្តិ build</b><button id="btnClearHistory" class="link">សម្អាត</button></div>
+            <ul id="buildHistory"></ul>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel" id="panel-settings">
+        <div class="panel-head"><b data-i18n="settings">Settings</b></div>
+        <div class="pad">
+          <label class="lbl" data-i18n="theme">ពណ៌ផ្ទៃ</label>
+          <select id="setTheme" class="inp">
+            <option value="dark" data-i18n="dark">Dark</option>
+            <option value="light" data-i18n="light">Light</option>
+          </select>
+
+          <label class="lbl" data-i18n="fontSize">ទំហំអក្សរ</label>
+          <input id="setFont" class="inp" type="number" min="11" max="22" value="13" />
+
+          <label class="lbl" data-i18n="tabSize">Tab size</label>
+          <select id="setTab" class="inp">
+            <option value="2">2</option><option value="4">4</option>
+          </select>
+
+          <label class="chk"><input id="setWrap" type="checkbox" /> <span data-i18n="wordWrap">បត់បន្ទាត់ (word wrap)</span></label>
+          <label class="chk"><input id="setAuto" type="checkbox" checked /> <span data-i18n="autosave">រក្សាទុកស្វ័យប្រវត្តិ</span></label>
+          <label class="chk"><input id="setLive" type="checkbox" checked /> <span data-i18n="liveReload">Preview ថ្មីពេល save</span></label>
+
+          <label class="lbl" data-i18n="language">ភាសា</label>
+          <select id="setLang" class="inp">
+            <option value="km">ខ្មែរ</option>
+            <option value="en">English</option>
+          </select>
+
+          <div class="divider"></div>
+          <p class="hint" id="limitsHint">—</p>
+          <button id="btnDeleteProject" class="btn danger block" data-i18n="deleteProject">🗑 លុបគម្រោងនេះ</button>
+          <a class="link" href="/appforge/" data-i18n="classic">ប្រអប់បង្កើត App បែបចាស់ →</a>
+          <a class="link" href="/buffy" data-i18n="chat">Buffy Chat →</a>
+        </div>
+      </section>
+
+    </aside>
+
+    <!-- ─────────────────────────── editor ─────────────────────────── -->
+    <main class="main" id="main">
+      <div class="tabs" id="tabs"></div>
+
+      <div class="editor-shell" id="editorShell">
+        <div class="empty-state" id="emptyState">
+          <div class="empty-logo">⚡</div>
+          <h2>AppForge IDE</h2>
+          <p>បើកឯកសារពី Explorer ឬបង្កើតគម្រោងថ្មី។</p>
+          <div class="empty-actions">
+            <button class="btn primary" id="emptyNew" data-i18n="newProject">＋ គម្រោងថ្មី</button>
+            <button class="btn" id="emptyTemplate" data-i18n="templates">🧩 Template</button>
+            <button class="btn" id="emptyImport" data-i18n="import">⬆ Import ZIP</button>
+          </div>
+          <div class="shortcuts">
+            <span><kbd>Ctrl</kbd>+<kbd>S</kbd> save</span>
+            <span><kbd>Ctrl</kbd>+<kbd>F</kbd> find</span>
+            <span><kbd>Ctrl</kbd>+<kbd>P</kbd> quick open</span>
+            <span><kbd>Tab</kbd> indent</span>
+          </div>
+        </div>
+
+        <div class="editor" id="editor" hidden>
+          <div class="gutter" id="gutter" aria-hidden="true"></div>
+          <div class="code-wrap" id="codeWrap">
+            <pre class="highlight" id="highlight" aria-hidden="true"><code id="hlCode"></code></pre>
+            <textarea id="code" class="code" spellcheck="false" autocomplete="off"
+              autocapitalize="off" autocorrect="off" wrap="off" aria-label="Code editor"></textarea>
+          </div>
+        </div>
+
+        <div class="findbar" id="findBar" hidden>
+          <input id="findInput" class="inp" placeholder="រក…" />
+          <input id="findReplace" class="inp" placeholder="ជំនួសដោយ…" />
+          <button id="findPrev" class="btn sm" title="Previous">↑</button>
+          <button id="findNext" class="btn sm" title="Next">↓</button>
+          <button id="findReplaceOne" class="btn sm" data-i18n="replace">ជំនួស</button>
+          <button id="findReplaceAll" class="btn sm" data-i18n="replaceAll">ទាំងអស់</button>
+          <button id="findClose" class="btn sm icon" title="Close">✕</button>
+        </div>
+
+        <section class="bottom" id="bottom">
+          <div class="bottom-head">
+            <button class="btab on" data-b="problems"><span data-i18n="problems">បញ្ហា</span> <span class="pill" id="problemCount">0</span></button>
+            <button class="btab" data-b="output"><span data-i18n="output">Output</span></button>
+            <button class="btab" data-b="buildlog"><span data-i18n="buildLog">Build log</span></button>
+            <button id="bottomClose" class="btn sm icon" title="Hide">✕</button>
+          </div>
+          <pre class="out on" id="problems"></pre>
+          <pre class="out" id="output"></pre>
+          <pre class="out" id="buildlog"></pre>
+        </section>
+      </div>
+    </main>
+
+    <!-- ─────────────────────────── preview ─────────────────────────── -->
+    <section class="preview" id="previewPane">
+      <div class="preview-head">
+        <b data-i18n="preview">Live Preview</b>
+        <div class="pv-actions">
+          <button id="pvDesktop" class="btn sm icon on" title="Desktop">🖥</button>
+          <button id="pvMobile" class="btn sm icon" title="Mobile">📱</button>
+          <button id="pvReload" class="btn sm icon" title="Reload">⟳</button>
+          <a id="pvOpen" class="btn sm icon" title="Open in tab" target="_blank" rel="noopener">↗</a>
+          <button id="pvHide" class="btn sm icon" title="Close">✕</button>
+        </div>
+      </div>
+      <div class="frame-wrap" id="frameWrap">
+        <iframe id="preview" title="Live preview" sandbox="allow-scripts allow-forms allow-modals allow-popups allow-downloads"></iframe>
+      </div>
+    </section>
+
+  </div>
+
+  <!-- ─────────────────────────── status bar ─────────────────────────── -->
+  <footer class="status">
+    <span class="st-item" id="stStatus">● Ready</span>
+    <span class="st-item st-path" id="stPath">—</span>
+    <span class="st-right">
+      <span class="st-item" id="stPos">Ln 1, Col 1</span>
+      <span class="st-item" id="stLang">Text</span>
+      <span class="st-item" id="stBuild">APK: —</span>
+    </span>
+  </footer>
+</div>
+
+<!-- modal -->
+<div class="modal" id="modal" hidden>
+  <div class="modal-card">
+    <h3 id="modalTitle">—</h3>
+    <p class="hint" id="modalHint"></p>
+    <input id="modalInput" class="inp" />
+    <select id="modalSelect" class="inp" hidden></select>
+    <div class="modal-actions">
+      <button id="modalCancel" class="btn" data-i18n="cancel">បោះបង់</button>
+      <button id="modalOk" class="btn primary" data-i18n="ok">យល់ព្រម</button>
+    </div>
+  </div>
+</div>
+
+<input type="file" id="fileInput" multiple hidden />
+<input type="file" id="zipInput" accept=".zip,application/zip" hidden />
+<div class="toast" id="toast" hidden></div>
+
+<script src="../gen.js"></script>
+<script src="./editor.js"></script>
+<script src="./ide.js"></script>
+</body>
+</html>

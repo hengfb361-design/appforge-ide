@@ -56,13 +56,24 @@
     const color = hexColor(c.color, '#12B886');
     const url = String(c.url || '').trim();
     const toggles = c.toggles || {};
+    const local = !!c.local;
+    const perms = [];
+    (Array.isArray(c.permissions) ? c.permissions : []).forEach((p) => {
+      const pname = String(p || '').trim().toUpperCase().replace(/^ANDROID\.PERMISSION\./, '');
+      if (/^[A-Z][A-Z0-9_]{1,40}$/.test(pname) && perms.indexOf(pname) < 0 && perms.length < 24) perms.push(pname);
+    });
     return {
       name: name.slice(0, 40),
       pkg: packageOf(name, c.pkg),
       template: template,
       color: color,
       colorDark: darker(color, 0.72),
-      url: /^https?:\/\/[^\s]+$/.test(url) ? url : 'https://example.com',
+      url: local ? 'file:///android_asset/www/index.html'
+                 : (/^https?:\/\/[^\s]+$/.test(url) ? url : 'https://example.com'),
+      local: local,
+      permissions: perms,
+      orientation: ['portrait', 'landscape'].indexOf(c.orientation) >= 0 ? c.orientation : 'unspecified',
+      icon: (c.icon && typeof c.icon === 'object') ? c.icon : null,
       versionName: (String(c.versionName || '1.0').trim() || '1.0').slice(0, 20),
       versionCode: Math.max(1, Math.min(2147483647, parseInt(c.versionCode, 10) || 1)),
       js: toggles.js !== false,
@@ -162,9 +173,20 @@
     const activityAttr = c.template === 'webview'
       ? ['            android:configChanges="orientation|screenSize|keyboardHidden"']
       : [];
+    if (c.orientation && c.orientation !== 'unspecified') {
+      activityAttr.push('            android:screenOrientation="' + c.orientation + '"');
+    }
+    const perms = (c.permissions || []).slice();
+    if (hasInternet && perms.indexOf('INTERNET') < 0) perms.unshift('INTERNET');
+    if (c.local && perms.indexOf('INTERNET') < 0) {
+      // Bundled assets still need INTERNET when the page calls an API.
+      perms.unshift('INTERNET');
+    }
+    const permLines = perms.map((p) =>
+      '    <uses-permission android:name="android.permission.' + p + '" />');
     const appAttrs = [
       '        android:allowBackup="true"',
-      '        android:icon="@drawable/ic_launcher"',
+      '        android:icon="' + (c.icon && Object.keys(c.icon).length ? '@mipmap/ic_launcher' : '@drawable/ic_launcher') + '"',
       '        android:label="@string/app_name"',
       '        android:supportsRtl="true"',
       c.template === 'webview' ? '        android:usesCleartextTraffic="true"' : null,
@@ -173,7 +195,7 @@
     return [
       '<?xml version="1.0" encoding="utf-8"?>',
       '<manifest xmlns:android="http://schemas.android.com/apk/res/android">',
-      hasInternet ? '    <uses-permission android:name="android.permission.INTERNET" />' : '',
+      permLines.join('\n'),
       '    <application',
       appAttrs.join('\n'),
       '        <activity',
@@ -307,7 +329,7 @@
         '            override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {',
         '                val link = request.url',
         '                val host = link.host ?: ""',
-        '                if (host.isNotEmpty() && !host.endsWith(APP_HOST)) {',
+        '                if (host.isNotEmpty() && (APP_HOST.isEmpty() || !host.endsWith(APP_HOST))) {',
         '                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(link.toString())))',
         '                    return true',
         '                }',
@@ -680,6 +702,63 @@
     return { config: c, files: files };
   }
 
+  /* --------------------- IDE project → Android project --------------------- */
+  /* Web files become WebView assets. A file whose path already looks like
+     part of a Gradle project (app/src/main/..., build.gradle, .github/...)
+     replaces the generated one, so a Java or Kotlin file is compiled by
+     Gradle — nothing is renamed into place. */
+  const NATIVE_PATH = /^(?:app\/(?:src\/main\/(?:java|kotlin|res|assets)|build\.gradle|proguard-rules\.pro)|build\.gradle|settings\.gradle|gradle\.properties|\.github\/)/;
+
+  function buildProject(cfg, projectFiles) {
+    const c = cfg || {};
+    const online = !!c.online && /^https?:\/\/[^\s]+$/i.test(String(c.url || '').trim());
+    const config = normalize(Object.assign({}, c, {
+      template: 'webview', local: !online,
+      url: online ? String(c.url).trim() : ''
+    }));
+    const base = build(config);
+    let files = base.files.slice();
+    const index = {};
+    files.forEach((f, i) => { index[f.path] = i; });
+    const put = (entry) => {
+      if (Object.prototype.hasOwnProperty.call(index, entry.path)) {
+        files[index[entry.path]] = entry;
+      } else {
+        index[entry.path] = files.length;
+        files.push(entry);
+      }
+    };
+    const icons = config.icon && typeof config.icon === 'object' ? config.icon : null;
+    if (icons && Object.keys(icons).length) {
+      const at = index['app/src/main/res/drawable/ic_launcher.xml'];
+      if (typeof at === 'number') files.splice(at, 1);
+      Object.keys(icons).forEach((density) => {
+        if (!/^mipmap-(mdpi|hdpi|xhdpi|xxhdpi|xxxhdpi)$/.test(density)) return;
+        const raw = String(icons[density] || '').split(',').pop();
+        if (!raw) return;
+        put({ path: 'app/src/main/res/' + density + '/ic_launcher.png', b64: raw });
+      });
+    }
+    let web = 0;
+    let native = 0;
+    (Array.isArray(projectFiles) ? projectFiles : []).forEach((f) => {
+      const path = String((f && f.path) || '').replace(/^\.?\/+/, '');
+      if (!path) return;
+      const entry = {};
+      if (typeof f.text === 'string') entry.text = f.text;
+      else if (typeof f.b64 === 'string') entry.b64 = f.b64;
+      else return;
+      if (NATIVE_PATH.test(path)) {
+        put(Object.assign({ path: path }, entry));
+        native += 1;
+      } else {
+        put(Object.assign({ path: 'app/src/main/assets/www/' + path }, entry));
+        web += 1;
+      }
+    });
+    return { config: config, files: files, web: web, native: native, local: config.local };
+  }
+
   /* -------------------------------- ZIP I/O -------------------------------- */
 
   let CRC_TABLE = null;
@@ -717,6 +796,13 @@
   const DOS_TIME = (12 << 11) | (0 << 5) | 0;
   const DOS_DATE = ((2026 - 1980) << 9) | (11 << 5) | 3;
 
+  function fromBase64(b64) {
+    const raw = atob(String(b64 || ''));
+    const out = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+    return out;
+  }
+
   function zip(files) {
     const enc = new TextEncoder();
     const parts = [];
@@ -724,7 +810,8 @@
     let offset = 0;
     for (const file of files) {
       const nameBytes = enc.encode(file.path);
-      const data = typeof file.text === 'string' ? enc.encode(file.text) : file.data;
+      const data = typeof file.text === 'string' ? enc.encode(file.text)
+        : (typeof file.b64 === 'string' ? fromBase64(file.b64) : file.data);
       const sum = crc32(data);
 
       const local = new Uint8Array(30 + nameBytes.length);
@@ -1198,7 +1285,7 @@
     if (!gradle.includes('compileSdk = 34')) issues.push('compileSdk មិនមែន 34');
 
     files.forEach((f) => {
-      if (!f.text || !f.text.trim()) issues.push('ឯកសារទទេ: ' + f.path);
+      if (typeof f.text === 'string' && !f.text.trim()) issues.push('ឯកសារទទេ: ' + f.path);
       if (f.path.endsWith('.kt')) {
         if (cfg.pkg && !f.text.includes('package ' + cfg.pkg)) issues.push('package ខុស: ' + f.path);
         const pairs = [['{', '}'], ['(', ')']];
@@ -1229,6 +1316,10 @@
     }
     if (cfg.template === 'webview' && cfg.pull && !map['app/src/main/res/layout/activity_main.xml']) {
       issues.push('Refresh បើកតែគ្មាន layout');
+    }
+    const isProject = files.some((f) => f.path.indexOf('app/src/main/assets/www/') === 0);
+    if (isProject && !map['app/src/main/assets/www/index.html']) {
+      issues.push('ខ្វះ index.html នៅ root គម្រោង (វាជាចំណុចចាប់ផ្តើមរបស់ WebView)');
     }
 
     return { ok: issues.length === 0, issues: issues };
@@ -1313,6 +1404,7 @@
     parseDescription: descScreens,
     verify: verify,
     build: build,
+    buildProject: buildProject,
     zip: zip
   };
 });

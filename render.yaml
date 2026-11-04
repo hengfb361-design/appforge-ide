@@ -1,14 +1,25 @@
-# Render Blueprint — creates AppForge as its own free static site.
-# In the Render dashboard: New + → Blueprint → pick this repo.
-# (The existing buffy-ai web service is not managed by this file.)
+# Render Blueprint for AppForge IDE.
+# The IDE is served by the FastAPI app (local_app.py): the page itself is
+# static, but projects, the preview route and the APK build proxy are Python.
+# New + → Blueprint → pick this repo.
 services:
   - type: web
-    name: appforge
-    runtime: static
-    buildCommand: echo "static files, nothing to build"
-    staticPublishPath: ./app-forge/public
-    pullRequestPreviewsEnabled: false
-    headers:
-      - path: /*
-        name: X-Frame-Options
-        value: SAMEORIGIN
+    name: appforge-ide
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn local_app:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.6"
+      # Project files live on the instance disk; /tmp is writable on Render and
+      # survives until the next deploy/restart, while the browser keeps a copy
+      # so nothing is lost when the instance is recycled.
+      - key: IDE_DATA_DIR
+        value: /tmp/appforge-ide
+      # Paste a GitHub token in the dashboard (Environment → GITHUB_TOKEN).
+      # Never commit it: the APK builder reads it server-side only.
+      - key: GITHUB_TOKEN
+        sync: false

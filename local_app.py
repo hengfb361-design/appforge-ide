@@ -1097,6 +1097,83 @@ def _gh(method: str, path: str, payload=None):
     )
 
 
+def _af_commit(full: str, files: list):
+    """Push every project file as one commit. Returns an error string or None.
+
+    The contents API needs a per-file `sha` to update an existing path, which
+    fails on the README that `auto_init` creates. The Git Data API writes one
+    tree instead, so N files cost N blob calls plus a single commit.
+    """
+    ref, tree_sha = "", ""
+    for _attempt in range(6):
+        r = _gh("GET", "/repos/%s/git/ref/heads/main" % full)
+        if r.status_code == 200:
+            ref = ((r.json() or {}).get("object") or {}).get("sha", "")
+            break
+        time.sleep(1)
+    if ref:
+        base = _gh("GET", "/repos/%s/git/commits/%s" % (full, ref))
+        if base.status_code == 200:
+            tree_sha = ((base.json() or {}).get("tree") or {}).get("sha", "")
+    else:
+        # auto_init had not finished: seed the branch so it has a parent commit.
+        seed = _gh("PUT", "/repos/%s/contents/.appforge" % full, {
+            "message": "Initialize", "branch": "main",
+            "content": base64.b64encode(b"appforge").decode("ascii"),
+        })
+        if seed.status_code in (200, 201):
+            r = _gh("GET", "/repos/%s/git/ref/heads/main" % full)
+            if r.status_code == 200:
+                ref = ((r.json() or {}).get("object") or {}).get("sha", "")
+
+    entries = []
+    for path, data in files:
+        blob = _gh("POST", "/repos/%s/git/blobs" % full, {
+            "content": base64.b64encode(data).decode("ascii"),
+            "encoding": "base64",
+        })
+        if blob.status_code not in (200, 201):
+            return "បញ្ជូន %s មិនបាន (GitHub %s: %s)" % (
+                path, blob.status_code, _gh_msg(blob))
+        entries.append({"path": path, "mode": "100644", "type": "blob",
+                        "sha": (blob.json() or {}).get("sha", "")})
+
+    body = {"tree": entries}
+    if tree_sha:
+        body["base_tree"] = tree_sha
+    tree = _gh("POST", "/repos/%s/git/trees" % full, body)
+    if tree.status_code not in (200, 201):
+        return "បង្កើត tree មិនបាន (GitHub %s: %s)" % (tree.status_code, _gh_msg(tree))
+
+    commit_body = {"message": "Add app project (AppForge IDE)",
+                   "tree": (tree.json() or {}).get("sha", "")}
+    if ref:
+        commit_body["parents"] = [ref]
+    made = _gh("POST", "/repos/%s/git/commits" % full, commit_body)
+    if made.status_code not in (200, 201):
+        return "បង្កើត commit មិនបាន (GitHub %s: %s)" % (made.status_code, _gh_msg(made))
+    new_commit = (made.json() or {}).get("sha", "")
+
+    if ref:
+        upd = _gh("PATCH", "/repos/%s/git/refs/heads/main" % full,
+                  {"sha": new_commit, "force": False})
+        if upd.status_code != 200:
+            return "ធ្វើបច្ចុប្បន្នភាព branch មិនបាន (GitHub %s: %s)" % (
+                upd.status_code, _gh_msg(upd))
+    return None
+
+
+def _af_dispatch(full: str, files: list) -> None:
+    """Kick the workflow explicitly. Ref updates do not always emit the push
+    event Actions listens for, so the build would otherwise never start."""
+    workflows = [p for p, _d in files if p.startswith(".github/workflows/")
+                 and p.endswith((".yml", ".yaml"))]
+    prefer = [w for w in workflows if "apk" in w]
+    for path in (prefer or workflows)[:2]:
+        _gh("POST", "/repos/%s/actions/workflows/%s/dispatches" % (
+            full, path.rsplit("/", 1)[-1]), {"ref": "main"})
+
+
 def _af_slug(repo: str) -> str:
     """Accept only owner/name, so the token cannot be pointed elsewhere."""
     parts = (repo or "").strip().split("/")
@@ -1159,7 +1236,7 @@ def _af_files(payload) -> list:
 @app.get("/api/appforge/ready")
 def appforge_ready():
     """Lets the page hide the button instead of failing on click."""
-    return {"ok": True, "github": bool(_af_token()), "build": "v6",
+    return {"ok": True, "github": bool(_af_token()), "build": "v7",
             "ide": True, "logs": True,
             "token_var": _af_token_name(),
             "env_names": sorted(k for k in os.environ
@@ -1206,17 +1283,10 @@ async def appforge_build(request: Request):
                 status_code=502,
             )
         full = owner + "/" + name
-        for path, data in files:
-            put = _gh("PUT", "/repos/%s/contents/%s" % (full, path), {
-                "message": "Add " + path,
-                "content": base64.b64encode(data).decode("ascii"),
-                "branch": "main",
-            })
-            if put.status_code not in (200, 201):
-                return JSONResponse(
-                    {"detail": "push %s មិនបាន (GitHub %s: %s)" % (path, put.status_code, _gh_msg(put))},
-                    status_code=502,
-                )
+        error = _af_commit(full, files)
+        if error:
+            return JSONResponse({"detail": error}, status_code=502)
+        _af_dispatch(full, files)
         html_url = (created.json() or {}).get("html_url") or ("https://github.com/" + full)
         return {"ok": True, "repo": full, "url": html_url, "files": len(files)}
     except requests.RequestException as exc:

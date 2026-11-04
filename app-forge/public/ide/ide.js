@@ -911,8 +911,16 @@
       const r = await fetch('/api/appforge/build', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
       });
-      const data = await r.json();
-      if (!r.ok) throw new Error(data.detail || ('HTTP ' + r.status));
+      // A proxy can cut a long request and leave an empty body; never let that
+      // surface as "Unexpected end of JSON input".
+      const raw = await r.text();
+      let data = {};
+      try { data = raw ? JSON.parse(raw) : {}; } catch (e) { data = {}; }
+      if (!r.ok) {
+        throw new Error(data.detail || ('Server ' + r.status +
+          (raw ? ': ' + raw.slice(0, 140) : ' — មិនបានឆ្លើយតប (សាកម្តងទៀត)')));
+      }
+      if (!data.repo) throw new Error('Server មិនបានបង្កើត repo — សាកម្តងទៀត');
       state.build.repo = data.repo;
       state.build.url = data.url;
       $('#repoLink').href = data.url;
@@ -936,7 +944,7 @@
     if (!state.build.repo) return;
     try {
       const r = await fetch('/api/appforge/status?repo=' + encodeURIComponent(state.build.repo));
-      const s = await r.json();
+      const s = await r.json().catch(() => ({ state: 'unknown' }));
       if (s.state === 'running' || s.state === 'starting') {
         $('#buildState').textContent = '⏳ ' + (s.state === 'starting' ? 'ចាប់ផ្តើម…' : 'កំពុង build…') + ' (' + (s.status || '') + ')';
         $('#stBuild').textContent = 'APK: building';

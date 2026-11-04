@@ -22,3 +22,6 @@ content/
 
 # hosted bootstrap copy (deployed to Freebuff Sites)
 sites/
+
+# local build artefacts (APK proof, not source)
+artifacts/

@@ -32,6 +32,7 @@
     history: [],
     build: { repo: '', url: '', timer: null, busy: false, last: null },
     previewErrors: [],
+    syntaxErrors: [],
     editor: null,
     offline: false
   };
@@ -341,6 +342,7 @@
         setDirtyDot();
         renderTabs();
         saveLocalSoon();
+        checkSyntax();
         if (state.settings.auto) saveSoon();
         if (state.settings.live) reloadPreviewSoon();
       },
@@ -397,8 +399,29 @@
     while (el.childNodes.length > 400) el.removeChild(el.firstChild);
   }
 
+  const checkSyntax = debounce(() => {
+    state.syntaxErrors = [];
+    const path = state.active;
+    if (path && /\.(js|mjs)$/i.test(path)) {
+      const text = (state.files[path] || {}).text || '';
+      // `new Function` rejects module syntax that is valid in a real page.
+      if (text.trim() && !/\b(import|export)\s/.test(text)) {
+        try {
+          new Function(text); // eslint-disable-line no-new-func
+        } catch (e) {
+          const at = /line (\d+)/i.exec(e.message || '');
+          state.syntaxErrors.push({
+            file: path, line: at ? parseInt(at[1], 10) : 0,
+            message: 'SyntaxError: ' + (e.message || 'invalid JavaScript')
+          });
+        }
+      }
+    }
+    renderProblems();
+  }, 650);
+
   function renderProblems() {
-    const items = state.previewErrors.slice();
+    const items = state.previewErrors.concat(state.syntaxErrors);
     const hasIndex = state.list.some((f) => f.path === 'index.html');
     if (state.list.length && !hasIndex) {
       items.unshift({ message: 'ខ្វះ index.html នៅ root — preview និង APK ត្រូវការវា', file: 'index.html', line: 0 });
@@ -406,7 +429,8 @@
     $('#problemCount').textContent = String(items.length);
     $('#problemCount').className = 'pill' + (items.length ? ' bad' : ' ok');
     $('#problems').innerHTML = items.length
-      ? items.map((i) => '<span class="err">✖ ' + esc(i.file) + (i.line ? ':' + i.line : '') + ' — ' + esc(i.message) + '</span>').join('\n')
+      ? items.map((i) => '<div class="prob" data-file="' + esc(i.file) + '" data-line="' + (i.line || 0) + '">' +
+          '<span class="err">✖ ' + esc(i.file) + (i.line ? ':' + i.line : '') + ' — ' + esc(i.message) + '</span></div>').join('')
       : '<span class="ok">✔ គ្មានបញ្ហា</span>';
     $('#stBuild').textContent = items.length ? ('Problems: ' + items.length) : 'APK: ' + (state.build.last || '—');
   }
@@ -1260,6 +1284,11 @@
     });
 
     // bottom panel
+    $('#problems').addEventListener('click', (e) => {
+      const row = e.target.closest('[data-file]');
+      if (!row) return;
+      openFile(row.getAttribute('data-file'), parseInt(row.getAttribute('data-line'), 10) || 0).catch(() => {});
+    });
     $$('.btab').forEach((b) => b.addEventListener('click', () => showBottom(b.getAttribute('data-b'))));
     $('#bottomClose').addEventListener('click', () => $('#bottom').classList.add('collapsed'));
 

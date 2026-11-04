@@ -1097,6 +1097,54 @@ def _gh(method: str, path: str, payload=None):
     )
 
 
+_AF_SCOPE_CACHE = {"fp": "", "at": 0.0, "data": None}
+
+
+def _af_token_scopes() -> dict:
+    """Report which scopes the server-side token carries — never the token.
+
+    A rotated PAT silently breaks builds when `repo` or `workflow` is missing,
+    so /ready?scopes=1 exposes GitHub's `x-oauth-scopes` header instead of
+    making an operator paste a secret somewhere to find out.
+    """
+    token = _af_token()
+    if not token:
+        return {"scopes": [], "missing": ["repo", "workflow"],
+                "sufficient": False, "can_delete_repo": False}
+    fp = hashlib.sha256(token.encode()).hexdigest()[:12]
+    with _AF_LOCK:
+        cached = dict(_AF_SCOPE_CACHE)
+    if cached["fp"] == fp and cached["data"] and time.time() - cached["at"] < 300:
+        return cached["data"]
+    try:
+        resp = requests.get(
+            _AF_API + "/user", timeout=8,
+            headers={"Authorization": "Bearer " + token,
+                     "Accept": "application/vnd.github+json",
+                     "X-GitHub-Api-Version": "2022-11-28",
+                     "User-Agent": "AppForge/1.0"},
+        )
+        raw = resp.headers.get("x-oauth-scopes", "")
+        data = {"scopes": [s.strip() for s in raw.split(",") if s.strip()],
+                "status": resp.status_code,
+                # fine-grained PATs send no x-oauth-scopes header at all
+                "granular": bool(resp.status_code == 200 and not raw)}
+    except Exception as exc:  # offline, DNS, timeout — report, never raise
+        data = {"scopes": [], "status": 0, "error": type(exc).__name__}
+    scopes = data["scopes"]
+    if data.get("granular"):
+        # Scope list is invisible for fine-grained tokens; GitHub gates per repo.
+        data.update(missing=[], sufficient=True, can_delete_repo=None)
+    else:
+        ok = data.get("status") == 200
+        data.update(missing=[s for s in ("repo", "workflow") if s not in scopes],
+                    sufficient=ok and all(s in scopes for s in ("repo", "workflow")),
+                    can_delete_repo="delete_repo" in scopes)
+    with _AF_LOCK:
+        _AF_SCOPE_CACHE.update(fp=fp, at=time.time(), data=data)
+    return data
+
+
 def _af_commit(full: str, files: list):
     """Push every project file as one commit. Returns an error string or None.
 
@@ -1234,13 +1282,20 @@ def _af_files(payload) -> list:
 
 
 @app.get("/api/appforge/ready")
-def appforge_ready():
-    """Lets the page hide the button instead of failing on click."""
-    return {"ok": True, "github": bool(_af_token()), "build": "v7",
-            "ide": True, "logs": True,
-            "token_var": _af_token_name(),
-            "env_names": sorted(k for k in os.environ
-                                if "GITHUB" in k.upper() or k.lower().startswith("gh"))}
+def appforge_ready(request: Request):
+    """Lets the page hide the button instead of failing on click.
+
+    `?scopes=1` additionally reports the token's GitHub scopes (never the token
+    itself) so a rotation can be confirmed without anyone sharing a secret.
+    """
+    out = {"ok": True, "github": bool(_af_token()), "build": "v7",
+           "ide": True, "logs": True,
+           "token_var": _af_token_name(),
+           "env_names": sorted(k for k in os.environ
+                               if "GITHUB" in k.upper() or k.lower().startswith("gh"))}
+    if (request.query_params.get("scopes") or "").lower() in ("1", "true", "yes"):
+        out["token"] = _af_token_scopes()
+    return out
 
 
 @app.post("/api/appforge/build")

@@ -1334,8 +1334,12 @@
     }
 
     _scroll() {
-      this.pre.scrollTop = this.code.scrollTop;
-      this.pre.scrollLeft = this.code.scrollLeft;
+      // The textarea is the scroller (its own scrollTop), so the highlight layer
+      // is translated to match instead of relying on a second scroll box.
+      if (this.hl && this.hl.style) {
+        this.hl.style.transform = 'translate(' + (-(this.code.scrollLeft || 0)) + 'px,' +
+          (-(this.code.scrollTop || 0)) + 'px)';
+      }
       this.gutter.scrollTop = this.code.scrollTop;
       if (this.foldGutter) this.foldGutter.scrollTop = this.code.scrollTop;
       if (this.large) {

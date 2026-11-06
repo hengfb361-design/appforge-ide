@@ -287,8 +287,9 @@ kbd { background: var(--panel); border: 1px solid var(--border-2); border-bottom
   margin: 0; border: 0; padding: 10px 14px 60px 4px; font-family: var(--mono);
   font-size: 13px; line-height: 1.55; tab-size: 2; white-space: pre; overflow-wrap: normal;
 }
-.highlight { position: absolute; inset: 0; pointer-events: none; color: var(--text); }
-.highlight code { font: inherit; }
+.highlight { position: absolute; inset: 0; pointer-events: none; color: var(--text); overflow: hidden; }
+/* The textarea scrolls internally, so the highlight layer is moved with it. */
+.highlight code { font: inherit; display: block; will-change: transform; }
 .code {
   position: relative; display: block; width: 100%; min-height: 100%;
   background: transparent; color: transparent; caret-color: var(--accent);

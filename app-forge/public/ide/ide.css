@@ -414,3 +414,20 @@ kbd { background: var(--panel); border: 1px solid var(--border-2); border-bottom
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; }
 }
+
+/* ── editor toolbar, autocomplete list ─────────────────────────────────── */
+.tabs-row { display: flex; align-items: stretch; background: var(--bg-2); border-bottom: 1px solid var(--border); }
+.tabs-row .tabs { flex: 1 1 auto; border-bottom: 0; min-width: 0; }
+.tab-tools { display: flex; align-items: center; gap: 4px; padding: 4px 6px; flex: 0 0 auto; }
+.tab-tools .btn { white-space: nowrap; }
+.ac {
+  position: absolute; z-index: 60; min-width: 190px; max-width: 320px; max-height: 44vh;
+  overflow: auto; background: var(--panel); border: 1px solid var(--border);
+  border-radius: var(--radius); box-shadow: var(--shadow); padding: 4px;
+}
+.ac-item {
+  display: flex; justify-content: space-between; gap: 10px; padding: 5px 8px;
+  border-radius: 6px; font: 12px/1.4 var(--mono); color: var(--text); cursor: pointer;
+}
+.ac-item small { color: var(--text-dim); font-size: 10px; }
+.ac-item.on, .ac-item:hover { background: var(--accent-soft); }

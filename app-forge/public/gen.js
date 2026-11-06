@@ -13,6 +13,9 @@
     { id: 'desc', label: 'សរសេរការពិពណ៌នា → App', desc: 'សរសេរជាភាសាខ្មែរ/English ហើយទទួលបាន App ដែលដំណើរការ', icon: '🪄' },
     { id: 'webview', label: 'វេបសាយ → App', desc: 'បើក URL របស់អ្នកក្នុង WebView ពេញអេក្រង់', icon: '🌐' },
     { id: 'blank', label: 'App ទទួលទទេ', desc: 'Kotlin + XML សម្រាប់ចាប់ផ្តើមសរសេរខ្លួនឯង', icon: '🧩' },
+    { id: 'native', label: 'Native Android (Kotlin)', desc: 'Activity + XML layout ដែលរត់លើ Android ដោយផ្ទាល់', icon: '🤖' },
+    { id: 'java', label: 'Native Android (Java)', desc: 'គម្រោង Java + XML សម្រាប់ Android', icon: '☕' },
+    { id: 'ndk', label: 'C/C++ Android NDK', desc: 'JNI + CMake — កូដ C++ ក្លាយជា .so ក្នុង APK', icon: '⚙️' },
     { id: 'notes', label: 'App កត់ត្រា', desc: 'សរសេរ/លុបកំណត់ត្រា រក្សាទុកក្នុងទូរស័ព្ទ', icon: '📝' }
   ];
 
@@ -74,6 +77,7 @@
       permissions: perms,
       orientation: ['portrait', 'landscape'].indexOf(c.orientation) >= 0 ? c.orientation : 'unspecified',
       icon: (c.icon && typeof c.icon === 'object') ? c.icon : null,
+      target: ['debug', 'release', 'aab'].indexOf(c.target) >= 0 ? c.target : 'debug',
       versionName: (String(c.versionName || '1.0').trim() || '1.0').slice(0, 20),
       versionCode: Math.max(1, Math.min(2147483647, parseInt(c.versionCode, 10) || 1)),
       js: toggles.js !== false,
@@ -120,6 +124,7 @@
   }
 
   function appGradle(c) {
+    const isJava = c.template === 'java';
     const deps = [
       '    implementation("androidx.core:core-ktx:1.13.1")',
       '    implementation("androidx.appcompat:appcompat:1.7.0")',
@@ -128,13 +133,31 @@
     if (c.template === 'webview' && c.pull) {
       deps.push('    implementation("androidx.swiperefreshlayout:swiperefreshlayout:1.1.0")');
     }
+    // Only a release/aab build gets a signing config: pointing the debug build
+    // at a keystore that does not exist yet would be a broken project.
+    const signed = !!c.target && c.target !== 'debug';
+    const signing = signed ? [
+      '    signingConfigs {',
+      '        create("appforge") {',
+      '            storeFile = rootProject.file("appforge.jks")',
+      '            storePassword = System.getenv("KEYSTORE_PASS") ?: ""',
+      '            keyAlias = "appforge"',
+      '            keyPassword = System.getenv("KEYSTORE_PASS") ?: ""',
+      '        }',
+      '    }',
+      ''
+    ] : [];
+    const releaseSigning = signed
+      ? ['            signingConfig = signingConfigs.getByName("appforge")'] : [];
+
     return [
       'plugins {',
       '    id("com.android.application")',
-      '    id("org.jetbrains.kotlin.android")',
+      ...(isJava ? [] : ['    id("org.jetbrains.kotlin.android")']),
       '}',
       '',
       'android {',
+      ...signing,
       '    namespace = "' + c.pkg + '"',
       '    compileSdk = 34',
       '',
@@ -148,6 +171,7 @@
       '',
       '    buildTypes {',
       '        release {',
+      ...releaseSigning,
       '            isMinifyEnabled = false',
       '            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")',
       '        }',
@@ -157,9 +181,21 @@
       '        sourceCompatibility = JavaVersion.VERSION_17',
       '        targetCompatibility = JavaVersion.VERSION_17',
       '    }',
-      '    kotlinOptions {',
-      '        jvmTarget = "17"',
-      '    }',
+      ...(isJava ? [] : [
+        '    kotlinOptions {',
+        '        jvmTarget = "17"',
+        '    }'
+      ]),
+      ...(c.template === 'ndk' ? [
+        '    ndkVersion = "26.1.10909125"',
+        '    externalNativeBuild {',
+        '        cmake {',
+        '            path = file("src/main/cpp/CMakeLists.txt")',
+        '            version = "3.22.1"',
+        '        }',
+        '    }',
+        ''
+      ] : []),
       '}',
       '',
       'dependencies {',
@@ -572,9 +608,150 @@
     ].join('\n');
   }
 
-  function workflowYaml(c) {
+  /* ── native templates: Activity + XML layout, and a JNI bridge for NDK ── */
+
+  function activityNativeXml() {
     return [
-      'name: Build APK',
+      '<?xml version="1.0" encoding="utf-8"?>',
+      '<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"',
+      '    android:layout_width="match_parent"',
+      '    android:layout_height="match_parent"',
+      '    android:orientation="vertical"',
+      '    android:gravity="center"',
+      '    android:padding="24dp">',
+      '',
+      '    <TextView',
+      '        android:id="@+id/label"',
+      '        android:layout_width="wrap_content"',
+      '        android:layout_height="wrap_content"',
+      '        android:textSize="20sp"',
+      '        android:text="សួស្តី" />',
+      '',
+      '    <Button',
+      '        android:id="@+id/action"',
+      '        android:layout_width="wrap_content"',
+      '        android:layout_height="wrap_content"',
+      '        android:layout_marginTop="16dp"',
+      '        android:text="ចុចខ្ញុំ" />',
+      '</LinearLayout>',
+      ''
+    ].join('\n');
+  }
+
+  function mainActivityNative(c) {
+    return [
+      'package ' + c.pkg,
+      '',
+      'import android.os.Bundle',
+      'import android.widget.Button',
+      'import android.widget.TextView',
+      'import androidx.appcompat.app.AppCompatActivity',
+      '',
+      'class MainActivity : AppCompatActivity() {',
+      '    private var taps = 0',
+      '',
+      '    override fun onCreate(savedInstanceState: Bundle?) {',
+      '        super.onCreate(savedInstanceState)',
+      '        setContentView(R.layout.activity_main)',
+      '        val label = findViewById<TextView>(R.id.label)',
+      '        findViewById<Button>(R.id.action).setOnClickListener {',
+      '            taps++',
+      '            label.text = "Taps: $taps"',
+      '        }',
+      '    }',
+      '}',
+      ''
+    ].join('\n');
+  }
+
+  function mainActivityJava(c) {
+    return [
+      'package ' + c.pkg + ';',
+      '',
+      'import android.os.Bundle;',
+      'import android.widget.Button;',
+      'import android.widget.TextView;',
+      'import androidx.appcompat.app.AppCompatActivity;',
+      '',
+      'public class MainActivity extends AppCompatActivity {',
+      '    private int taps = 0;',
+      '',
+      '    @Override',
+      '    protected void onCreate(Bundle savedInstanceState) {',
+      '        super.onCreate(savedInstanceState);',
+      '        setContentView(R.layout.activity_main);',
+      '        final TextView label = findViewById(R.id.label);',
+      '        Button action = findViewById(R.id.action);',
+      '        action.setOnClickListener(v -> {',
+      '            taps++;',
+      '            label.setText("Taps: " + taps);',
+      '        });',
+      '    }',
+      '}',
+      ''
+    ].join('\n');
+  }
+
+  function mainActivityNdk(c) {
+    return [
+      'package ' + c.pkg,
+      '',
+      'import android.os.Bundle',
+      'import android.widget.TextView',
+      'import androidx.appcompat.app.AppCompatActivity',
+      '',
+      'class MainActivity : AppCompatActivity() {',
+      '    // Implemented in app/src/main/cpp/native-lib.cpp',
+      '    private external fun stringFromJNI(): String',
+      '',
+      '    override fun onCreate(savedInstanceState: Bundle?) {',
+      '        super.onCreate(savedInstanceState)',
+      '        setContentView(R.layout.activity_main)',
+      '        findViewById<TextView>(R.id.label).text = stringFromJNI()',
+      '    }',
+      '',
+      '    companion object {',
+      '        init { System.loadLibrary("native-lib") }',
+      '    }',
+      '}',
+      ''
+    ].join('\n');
+  }
+
+  function nativeLibCpp(c) {
+    const fn = c.pkg.split('.').map((p) => p.replace(/[^A-Za-z0-9_]/g, '_')).join('_');
+    return [
+      '#include <jni.h>',
+      '#include <string>',
+      '',
+      'extern "C" JNIEXPORT jstring JNICALL',
+      'Java_' + fn + '_MainActivity_stringFromJNI(JNIEnv *env, jobject /* this */) {',
+      '    std::string hello = "សួស្តីពី C++ (JNI) ដំណើរការ ✓";',
+      '    return env->NewStringUTF(hello.c_str());',
+      '}',
+      ''
+    ].join('\n');
+  }
+
+  function cmakeLists() {
+    return [
+      'cmake_minimum_required(VERSION 3.22.1)',
+      'project("native-lib" CXX)',
+      '',
+      'add_library(native-lib SHARED native-lib.cpp)',
+      'target_link_libraries(native-lib log)',
+      ''
+    ].join('\n');
+  }
+
+  function workflowYaml(c) {
+    const target = c.target || 'debug';
+    const signed = target !== 'debug';
+    const task = target === 'aab' ? 'bundleRelease'
+      : (target === 'release' ? 'assembleRelease' : 'assembleDebug');
+    const base = slug(c.name);
+    const lines = [
+      'name: Build Android',
       '',
       'on:',
       '  push:',
@@ -595,18 +772,61 @@
       '      - uses: gradle/actions/setup-gradle@v4',
       '        with:',
       '          gradle-version: "8.7"',
-      '',
-      '      - name: Build debug APK',
-      '        run: gradle assembleDebug --no-daemon --stacktrace',
+      ''
+    ];
+    if (signed) {
+      lines.push(
+        '      - name: Create signing key',
+        '        run: |',
+        '          PASS="$(openssl rand -hex 12)"',
+        '          echo "KEYSTORE_PASS=$PASS" >> "$GITHUB_ENV"',
+        '          keytool -genkeypair -keystore appforge.jks -alias appforge \\',
+        '            -keyalg RSA -keysize 2048 -validity 10000 \\',
+        '            -storepass "$PASS" -keypass "$PASS" \\',
+        '            -dname "CN=AppForge, O=AppForge, C=KH"',
+        '',
+        '      - name: Save signing key',
+        '        run: |',
+        '          echo "alias: appforge" > keystore-info.txt',
+        '          echo "storePassword: $KEYSTORE_PASS" >> keystore-info.txt',
+        '          echo "keyPassword: $KEYSTORE_PASS" >> keystore-info.txt',
+        '          echo "file: appforge.jks" >> keystore-info.txt',
+        '',
+        '      - name: Upload signing key',
+        '        uses: actions/upload-artifact@v4',
+        '        with:',
+        '          name: ' + base + '-keystore',
+        '          path: |',
+        '            appforge.jks',
+        '            keystore-info.txt',
+        '          if-no-files-found: error',
+        ''
+      );
+    }
+    lines.push(
+      '      - name: Build ' + target.toUpperCase(),
+      '        run: gradle ' + task + ' --no-daemon --stacktrace',
       '',
       '      - name: Upload APK',
       '        uses: actions/upload-artifact@v4',
       '        with:',
-      '          name: ' + slug(c.name) + '-apk',
-      '          path: app/build/outputs/apk/debug/*.apk',
-      '          if-no-files-found: error',
+      '          name: ' + base + '-apk',
+      '          path: app/build/outputs/apk/*/*.apk',
+      '          if-no-files-found: ' + (signed ? 'ignore' : 'error'),
       ''
-    ].join('\n');
+    );
+    if (target === 'aab') {
+      lines.push(
+        '      - name: Upload AAB',
+        '        uses: actions/upload-artifact@v4',
+        '        with:',
+        '          name: ' + base + '-aab',
+        '          path: app/build/outputs/bundle/release/*.aab',
+        '          if-no-files-found: error',
+        ''
+      );
+    }
+    return lines.join('\n');
   }
 
   function readme(c) {
@@ -690,6 +910,17 @@
     } else if (c.template === 'notes') {
       add(srcDir + '/MainActivity.kt', mainActivityNotes(c));
       add('app/src/main/res/layout/activity_main.xml', activityNotesXml());
+    } else if (c.template === 'native') {
+      add(srcDir + '/MainActivity.kt', mainActivityNative(c));
+      add('app/src/main/res/layout/activity_main.xml', activityNativeXml());
+    } else if (c.template === 'java') {
+      add(srcDir + '/MainActivity.java', mainActivityJava(c));
+      add('app/src/main/res/layout/activity_main.xml', activityNativeXml());
+    } else if (c.template === 'ndk') {
+      add(srcDir + '/MainActivity.kt', mainActivityNdk(c));
+      add('app/src/main/res/layout/activity_main.xml', activityNativeXml());
+      add('app/src/main/cpp/CMakeLists.txt', cmakeLists());
+      add('app/src/main/cpp/native-lib.cpp', nativeLibCpp(c));
     } else {
       add(srcDir + '/MainActivity.kt', mainActivityBlank(c));
       add('app/src/main/res/layout/activity_main.xml', activityBlankXml(c));

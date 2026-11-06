@@ -1417,57 +1417,85 @@ def appforge_status(repo: str = ""):
             state = "failed"
         else:
             state = "running"
-        apk_ready = False
+        art_names = []
         if state == "done":
             arts = _gh("GET", "/repos/%s/actions/runs/%s/artifacts" % (full, run.get("id")))
             if arts.status_code == 200:
-                apk_ready = bool((arts.json() or {}).get("artifacts"))
+                art_names = [str(a.get("name") or "")
+                             for a in ((arts.json() or {}).get("artifacts") or [])]
+        has = lambda kind: any(kind in n.lower() for n in art_names)  # noqa: E731
         return {
             "state": state, "status": status, "conclusion": conclusion,
-            "run_url": run.get("html_url") or "", "apk_ready": apk_ready, "repo": full,
+            "run_url": run.get("html_url") or "", "apk_ready": has("apk"),
+            "aab_ready": has("aab"), "keystore_ready": has("keystore"),
+            "artifacts": art_names, "repo": full,
             **_af_run_progress(full, run),
         }
     except requests.RequestException as exc:
         return JSONResponse({"state": "unknown", "detail": str(exc)[:120]}, status_code=502)
 
 
+_AF_ARTIFACTS = {
+    "apk": (".apk", "application/vnd.android.package-archive", "app.apk"),
+    "aab": (".aab", "application/octet-stream", "app-release.aab"),
+    "keystore": (".jks", "application/octet-stream", "appforge.jks"),
+}
+
+
 @app.get("/api/appforge/apk")
-def appforge_apk(repo: str = ""):
-    """Streams the APK from the newest successful Actions run."""
+def appforge_apk(repo: str = "", kind: str = "apk"):
+    """Streams one build artifact (APK / AAB / keystore) from the newest success.
+
+    `kind` decides which file inside the artifacts is returned, so a release
+    build can hand out its signed AAB and the key it was signed with.
+    """
     if not _af_token():
         return JSONResponse({"detail": "Server មិនមាន GITHUB_TOKEN"}, status_code=503)
     full = _af_slug(repo)
     if not full:
         return JSONResponse({"detail": "repo មិនត្រឹមត្រូវ"}, status_code=400)
+    want = (kind or "apk").lower()
+    if want not in _AF_ARTIFACTS:
+        return JSONResponse({"detail": "ប្រភេទឯកសារមិនត្រឹមត្រូវ"}, status_code=400)
+    ext, media, filename = _AF_ARTIFACTS[want]
     try:
         runs = _gh("GET", "/repos/%s/actions/runs?per_page=5" % full)
         items = ((runs.json() or {}).get("workflow_runs") or []) if runs.status_code == 200 else []
         run = next((r for r in items if r.get("conclusion") == "success"), None)
         if not run:
-            return JSONResponse({"detail": "មិនទាន់មាន APK — build មិនទាន់ជោគជ័យ"}, status_code=409)
+            return JSONResponse({"detail": "មិនទាន់មានឯកសារ — build មិនទាន់ជោគជ័យ"}, status_code=409)
         arts = _gh("GET", "/repos/%s/actions/runs/%s/artifacts" % (full, run.get("id")))
         art_list = ((arts.json() or {}).get("artifacts") or []) if arts.status_code == 200 else []
         if not art_list:
             return JSONResponse({"detail": "គ្មាន artifact"}, status_code=409)
-        archive = requests.get(
-            art_list[0].get("archive_download_url"),
-            headers={"Authorization": "Bearer " + _af_token(), "User-Agent": "AppForge/1.0"},
-            timeout=120, allow_redirects=True,
-        )
-        if archive.status_code != 200:
-            return JSONResponse(
-                {"detail": "ទាញយក APK មិនបាន (GitHub %s)" % archive.status_code}, status_code=502)
-        bundle = zipfile.ZipFile(io.BytesIO(archive.content))
-        target = next((n for n in bundle.namelist() if n.endswith(".apk")), "")
-        if not target:
-            return JSONResponse({"detail": "ក្នុង artifact គ្មាន .apk"}, status_code=404)
-        return Response(
-            content=bundle.read(target),
-            media_type="application/vnd.android.package-archive",
-            headers={"Content-Disposition": 'attachment; filename="app-debug.apk"',
-                     "Cache-Control": "no-store"},
-        )
-    except (requests.RequestException, zipfile.BadZipFile) as exc:
+        # Workflow steps name artifacts after what they hold, so try those first;
+        # otherwise inspect each archive for a file with the wanted suffix.
+        ordered = [a for a in art_list if want in str(a.get("name") or "").lower()]
+        ordered += [a for a in art_list if a not in ordered]
+        for art in ordered:
+            archive = requests.get(
+                art.get("archive_download_url"),
+                headers={"Authorization": "Bearer " + _af_token(), "User-Agent": "AppForge/1.0"},
+                timeout=180, allow_redirects=True,
+            )
+            if archive.status_code != 200:
+                continue
+            try:
+                bundle = zipfile.ZipFile(io.BytesIO(archive.content))
+            except zipfile.BadZipFile:
+                continue
+            target = next((n for n in bundle.namelist()
+                           if n.lower().endswith(ext) and not n.endswith("/")), "")
+            if not target:
+                continue
+            return Response(
+                content=bundle.read(target),
+                media_type=media,
+                headers={"Content-Disposition": 'attachment; filename="%s"' % filename,
+                         "Cache-Control": "no-store"},
+            )
+        return JSONResponse({"detail": "ក្នុង artifact គ្មាន %s" % ext}, status_code=404)
+    except requests.RequestException as exc:
         return JSONResponse({"detail": "បរាជ័យ: %s" % str(exc)[:120]}, status_code=502)
 
 

@@ -305,7 +305,7 @@
     state.editor.setLang(path);
     state.editor.setValue(state.files[path].text);
     $('#stPath').textContent = path;
-    $('#stLang').textContent = window.IdeEditor.langOf(path);
+    $('#stLang').textContent = window.IdeEditor.langName(path);
     renderTabs();
     renderTree();
     if (line) state.editor.gotoLine(line);
@@ -660,6 +660,11 @@
   /* ─────────────────────────────── templates ───────────────────────────── */
 
   const TEMPLATES = {
+    // Native starters come from the Android generator, so the files in the
+    // project are exactly what Gradle will compile.
+    nativeKotlin: { label: 'Native Android (Kotlin)', gen: 'native' },
+    javaNative: { label: 'Native Android (Java)', gen: 'java' },
+    ndkCpp: { label: 'C/C++ Android NDK', gen: 'ndk' },
     blank: {
       label: 'Blank Web App',
       files: {
@@ -830,15 +835,18 @@
       state.open = [];
       state.active = '';
       state.dirty = {};
-      const paths = Object.keys(tpl.files);
-      for (let i = 0; i < paths.length; i++) {
-        const path = paths[i];
-        await api(projectApi('/file'), { method: 'PUT', body: { path: path, text: tpl.files[path] } });
-        state.files[path] = { text: tpl.files[path] };
+      const source = tpl.gen
+        ? G.build({ name: name, template: tpl.gen }).files
+        : Object.keys(tpl.files).map((p) => ({ path: p, text: tpl.files[p] }));
+      for (let i = 0; i < source.length; i++) {
+        await api(projectApi('/file'), { method: 'PUT', body: { path: source[i].path, text: source[i].text } });
+        state.files[source[i].path] = { text: source[i].text };
       }
       $('#projName').value = state.proj.name;
       await loadProject();
-      await openFile('index.html');
+      const first = source.some((f) => f.path === 'index.html') ? 'index.html'
+        : (source.map((f) => f.path).find((p) => /MainActivity\.(kt|java)$/.test(p)) || source[0].path);
+      await openFile(first);
       reloadPreview();
       const v = Object.assign({}, state.settings);
       try { localStorage.setItem(LS.proj, JSON.stringify(state.proj)); } catch (e) {}
@@ -862,6 +870,7 @@
       url: $('#bUrl').value,
       orientation: $('#bOrientation').value,
       permissions: perms,
+      target: ($('#bTarget') || {}).value || 'debug',
       icon: state.icon,
       color: '#12B886'
     };
@@ -895,8 +904,11 @@
     if (state.build.busy) return;
     const cfg = buildConfig();
     const files = await collectProjectFiles();
-    if (!files.some((f) => f.path === 'index.html')) {
-      toast('ត្រូវមាន index.html នៅ root មុនពេល build', 'err');
+    // A native project needs no index.html; a web one needs it to have anything
+    // to show, so only the web case is refused here.
+    const native = files.some((f) => /^(app\/src\/main|build\.gradle|settings\.gradle)/.test(f.path));
+    if (!native && !files.some((f) => f.path === 'index.html')) {
+      toast('ត្រូវមាន index.html នៅ root ឬឯកសារ Android មុនពេល build', 'err');
       return;
     }
     const result = G.buildProject(cfg, files);
@@ -987,9 +999,15 @@
         $('#buildState').textContent = '✅ APK រួចរាល់ — ចុច "ទាញយក APK"';
         $('#buildState').className = 'build-state ok';
         setBuildProgress(100, 'ok');
-        const link = $('#apkLink');
-        link.href = '/api/appforge/apk?repo=' + encodeURIComponent(state.build.repo);
-        link.hidden = false;
+        // Only show the buttons for files this run really produced.
+        const q = 'repo=' + encodeURIComponent(state.build.repo) + '&kind=';
+        const apk = $('#apkLink');
+        apk.hidden = !(s.apk_ready || !s.aab_ready);
+        apk.href = '/api/appforge/apk?' + q + 'apk';
+        const aab = $('#aabLink');
+        if (aab) { aab.hidden = !s.aab_ready; aab.href = '/api/appforge/apk?' + q + 'aab'; }
+        const ks = $('#keystoreLink');
+        if (ks) { ks.hidden = !s.keystore_ready; ks.href = '/api/appforge/apk?' + q + 'keystore'; }
         state.build.busy = false;
         state.build.pct = null;
         state.build.last = 'ready';
@@ -1275,6 +1293,105 @@
     if (on) reloadPreview();
   }
 
+  /* ───────────────── editor extras: completion, format, definition ───────────────── */
+
+  /* Project-wide symbols make the list useful across files, not just the
+     current one; every word is read from the project, never invented. */
+  const DECL = /\b(?:fun|class|struct|enum|interface|def|function|const|let|var|type|object|protocol)\s+([A-Za-z_$][\w$]{1,40})/g;
+
+  function symbolBank() {
+    const words = {};
+    Object.keys(state.files).forEach((p) => {
+      const text = (state.files[p] || {}).text;
+      if (typeof text !== 'string') return;
+      let m;
+      DECL.lastIndex = 0;
+      while ((m = DECL.exec(text)) !== null) words[m[1]] = 1;
+    });
+    return Object.keys(words);
+  }
+
+  const ac = { items: [], index: 0 };
+
+  function hideAc() {
+    const box = $('#acBox');
+    if (box) box.hidden = true;
+    ac.items = [];
+    ac.index = 0;
+  }
+
+  function markAc() {
+    const box = $('#acBox');
+    if (!box) return;
+    Array.prototype.forEach.call(box.children, (el, i) => {
+      el.classList.toggle('on', i === ac.index);
+    });
+  }
+
+  function showAc() {
+    const box = $('#acBox');
+    if (!box || !state.editor || !state.active) return;
+    const at = state.editor.wordAt();
+    if (at.word.length < 2) { hideAc(); return; }
+    const res = state.editor.complete(symbolBank());
+    ac.items = res.items;
+    ac.index = 0;
+    if (!res.items.length) { hideAc(); return; }
+    box.innerHTML = res.items.map((it, i) =>
+      '<div class="ac-item' + (i === 0 ? ' on' : '') + '" data-i="' + i + '">' +
+      '<b>' + esc(it.text) + '</b><small>' + esc(it.kind) + '</small></div>').join('');
+    // Anchor under the caret line so the list appears where the user is typing.
+    const ta = $('#code');
+    const lh = parseFloat(getComputedStyle(ta).lineHeight) || 20;
+    const line = ta.value.slice(0, ta.selectionStart).split('\n').length;
+    box.style.top = Math.max(0, Math.min(ta.clientHeight - 60,
+      ta.offsetTop + (line - 1) * lh - ta.scrollTop + lh)) + 'px';
+    box.style.left = '16px';
+    box.hidden = false;
+  }
+
+  function acceptAc(i) {
+    const item = ac.items[i];
+    if (!item) return;
+    hideAc();
+    state.editor.insertCompletion(item.text);
+  }
+
+  function formatDoc() {
+    if (!state.active) { toast('បើកឯកសារមុនសិន', 'err'); return; }
+    const changed = state.editor.format();
+    toast(changed ? 'តម្រឹមរួច — ' + window.IdeEditor.langName(state.active)
+                  : 'គ្មានអ្វីត្រូវតម្រឹម', changed ? 'ok' : '');
+  }
+
+  /* Jumps to the first place the word under the caret is declared. */
+  async function gotoDefinition() {
+    if (!state.active) return;
+    const at = state.editor.wordAt();
+    if (!at.word) { toast('ដាក់ cursor លើឈ្មោះមុនសិន', 'err'); return; }
+    const sym = at.word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp('\\b(?:fun|class|struct|enum|interface|def|function|const|let|var|type|object|protocol)' +
+      '\\s+' + sym + '\\b');
+    const files = state.list.filter((f) => !f.binary);
+    for (const f of files) {
+      let text = (state.files[f.path] || {}).text;
+      if (typeof text !== 'string') {
+        try {
+          const r = await api(projectApi('/file') + '?path=' + encodeURIComponent(f.path));
+          text = r.text;
+        } catch (e) { continue; }
+      }
+      const m = re.exec(text);
+      if (m) {
+        const line = text.slice(0, m.index).split('\n').length;
+        await openFile(f.path, line);
+        toast('→ ' + f.path + ' : ' + line, 'ok');
+        return;
+      }
+    }
+    toast('រកកន្លែងប្រកាស "' + at.word + '" មិនឃើញ', 'err');
+  }
+
   function bindUi() {
     $$('.act[data-panel]').forEach((b) => b.addEventListener('click', () => showPanel(b.getAttribute('data-panel'))));
     $('#btnPreviewToggle').addEventListener('click', () => showPreview());
@@ -1413,6 +1530,35 @@
         state.editor.find($('#findInput').value, e.shiftKey);
       }
     });
+
+    // editor tools: completion list, auto-indent, go to definition
+    $('#btnFormat').addEventListener('click', formatDoc);
+    $('#btnGotoDef').addEventListener('click', gotoDefinition);
+    $('#code').addEventListener('input', debounce(showAc, 140));
+    $('#code').addEventListener('blur', () => setTimeout(hideAc, 120));
+    $('#acBox').addEventListener('mousedown', (e) => {
+      const row = e.target.closest('[data-i]');
+      if (!row) return;
+      e.preventDefault();
+      acceptAc(parseInt(row.getAttribute('data-i'), 10) || 0);
+    });
+    $('#code').addEventListener('keydown', (e) => {
+      const box = $('#acBox');
+      const open = box && !box.hidden && ac.items.length;
+      if (open && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+        e.preventDefault();
+        ac.index = (ac.index + (e.key === 'ArrowDown' ? 1 : ac.items.length - 1)) % ac.items.length;
+        markAc();
+        return;
+      }
+      if (open && (e.key === 'Enter' || e.key === 'Tab')) {
+        e.preventDefault();
+        acceptAc(ac.index);
+        return;
+      }
+      if (e.key === 'Escape' && open) { e.preventDefault(); hideAc(); }
+      if ((e.ctrlKey || e.metaKey) && e.key === ' ') { e.preventDefault(); showAc(); }
+    }, true);
 
     // bottom panel
     $('#problems').addEventListener('click', (e) => {

@@ -104,6 +104,13 @@
             </div>
           </div>
 
+          <label class="lbl" data-i18n="buildTarget">ប្រភេទ build</label>
+          <select id="bTarget" class="inp">
+            <option value="debug">Debug APK — ដំឡើងបាន</option>
+            <option value="release">Release APK — ចុះហត្ថលេខា</option>
+            <option value="aab">Release AAB — សម្រាប់ Play Store</option>
+          </select>
+
           <label class="lbl" data-i18n="mode">របៀបដំណើរការ</label>
           <select id="bMode" class="inp">
             <option value="offline" data-i18n="offline">Offline — ឯកសារក្នុង App</option>
@@ -141,6 +148,8 @@
             <button id="btnStartBuild" class="btn primary block" data-i18n="buildApk">🤖 Build APK</button>
             <button id="btnRefreshLog" class="btn block" data-i18n="viewLog">📜 មើល Log</button>
             <a id="apkLink" class="btn success block" hidden download>⬇ ទាញយក APK</a>
+            <a id="aabLink" class="btn success block" hidden download>⬇ ទាញយក AAB</a>
+            <a id="keystoreLink" class="btn block" hidden download>🔑 ទាញយក Keystore</a>
             <a id="repoLink" class="link" target="_blank" rel="noopener" hidden>បើក repo នៅ GitHub ↗</a>
           </div>
           <p class="build-state" id="buildState" data-i18n="buildIdle">មិនទាន់ build</p>
@@ -203,7 +212,13 @@
 
     <!-- ─────────────────────────── editor ─────────────────────────── -->
     <main class="main" id="main">
-      <div class="tabs" id="tabs"></div>
+      <div class="tabs-row">
+        <div class="tabs" id="tabs"></div>
+        <div class="tab-tools">
+          <button id="btnFormat" class="btn sm" title="Auto-indent / format">⇥ តម្រឹម</button>
+          <button id="btnGotoDef" class="btn sm" title="Go to definition">⌖ Definition</button>
+        </div>
+      </div>
 
       <div class="editor-shell" id="editorShell">
         <div class="empty-state" id="emptyState">
@@ -231,6 +246,8 @@
               autocapitalize="off" autocorrect="off" wrap="off" aria-label="Code editor"></textarea>
           </div>
         </div>
+
+        <div class="ac" id="acBox" hidden></div>
 
         <div class="findbar" id="findBar" hidden>
           <input id="findInput" class="inp" placeholder="រក…" />

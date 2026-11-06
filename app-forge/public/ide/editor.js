@@ -7,25 +7,71 @@
   const LANGS = {
     html: ['html', 'htm', 'xhtml', 'vue', 'svg'],
     css: ['css', 'scss', 'less'],
-    js: ['js', 'mjs', 'jsx', 'ts', 'tsx', 'json'],
-    java: ['java', 'kt', 'kts', 'gradle'],
-    xml: ['xml', 'plist'],
-    python: ['py'],
-    php: ['php'],
-    md: ['md', 'markdown'],
-    text: ['txt', 'yml', 'yaml', 'properties', 'ini', 'toml', 'sh', 'bat', 'pro']
+    js: ['js', 'mjs', 'cjs', 'jsx'],
+    ts: ['ts', 'tsx', 'mts', 'cts'],
+    json: ['json', 'json5', 'geojson'],
+    xml: ['xml', 'plist', 'svgxml'],
+    yaml: ['yml', 'yaml'],
+    java: ['java'],
+    kotlin: ['kt', 'kts'],
+    gradle: ['gradle'],
+    c: ['c', 'h'],
+    cpp: ['cpp', 'cc', 'cxx', 'hpp', 'hh', 'hxx', 'ino'],
+    rust: ['rs'],
+    dart: ['dart'],
+    csharp: ['cs'],
+    go: ['go'],
+    swift: ['swift'],
+    python: ['py', 'pyw'],
+    php: ['php', 'phtml'],
+    shell: ['sh', 'bash', 'zsh', 'fish', 'bat', 'cmd', 'ps1'],
+    sql: ['sql'],
+    md: ['md', 'markdown', 'mdx'],
+    props: ['properties', 'ini', 'toml', 'conf', 'cfg', 'env'],
+    text: ['txt', 'log', 'pro', 'gitignore', 'cmake', 'mk', 'txt2']
   };
 
+  /* Plain names for the status bar, so the editor says what it is in. */
+  const LANG_LABELS = {
+    html: 'HTML', css: 'CSS', js: 'JavaScript', ts: 'TypeScript', json: 'JSON',
+    xml: 'XML', yaml: 'YAML', java: 'Java', kotlin: 'Kotlin', gradle: 'Gradle',
+    c: 'C', cpp: 'C++', rust: 'Rust', dart: 'Dart', csharp: 'C#', go: 'Go',
+    swift: 'Swift', python: 'Python', php: 'PHP', shell: 'Shell', sql: 'SQL',
+    md: 'Markdown', props: 'Properties', text: 'Plain text'
+  };
+
+  const COMMON = 'true false null';
   const KEYWORDS = {
-    js: 'break case catch class const continue debugger default delete do else export extends finally for function if import in instanceof let new of return static super switch this throw try typeof var void while with yield async await true false null undefined interface type enum implements public private protected readonly as from get set',
-    java: 'abstract assert boolean break byte case catch char class const continue default do double else enum extends final finally float for if implements import instanceof int interface long native new package private protected public return short static strictfp super switch synchronized this throw throws transient try void volatile while var val fun override lateinit companion object data when is in as true false null',
-    python: 'and as assert async await break class continue def del elif else except finally for from global if import in is lambda none nonlocal not or pass raise return True False None try while with yield self print',
-    php: 'abstract and array as break callable case catch class clone const continue declare default do echo else elseif empty enddeclare endfor endforeach endif endswitch endwhile eval exit extends final finally fn for foreach function global goto if implements include include_once instanceof insteadof interface isset list match namespace new or print private protected public readonly require require_once return static switch throw trait try unset use var while xor yield true false null',
-    css: 'important media supports keyframes font-face import charset page'
+    js: 'break case catch class const continue debugger default delete do else export extends finally for function if import in instanceof let new of return static super switch this throw try typeof var void while with yield async await interface type enum implements public private protected readonly as from get set ' + COMMON,
+    ts: 'break case catch class const continue declare default delete do else export extends finally for function if implement implements import in instanceof interface keyof let namespace new of private protected public readonly return satisfies static super switch this throw try type typeof var void while with yield as async await enum abstract ' + COMMON,
+    json: 'true false null',
+    java: 'abstract assert boolean break byte case catch char class const continue default do double else enum extends final finally float for if implements import instanceof int interface long native new package private protected public return short static strictfp super switch synchronized this throw throws transient try void volatile while var record sealed permits ' + COMMON,
+    kotlin: 'abstract actual annotation as break by catch class companion const constructor continue crossinline data delegate do dynamic else enum expect external field file final finally for fun get if import in infix init inline inner interface internal is lateinit noinline object open operator out override package param private protected public reified return sealed set super suspend tailrec this throw try typealias val value var vararg when where while ' + COMMON,
+    gradle: 'apply buildscript dependencies ext from id implementation plugins repositories task ' + COMMON,
+    c: 'auto break case char const continue default do double else enum extern float for goto if inline int long register restrict return short signed sizeof static struct switch typedef union unsigned void volatile while ' + COMMON,
+    cpp: 'alignas alignof asm auto bool break case catch char class const constexpr continue decltype default delete do double dynamic_cast else enum explicit export extern false float for friend goto if inline int long mutable namespace new noexcept nullptr operator private protected public register reinterpret_cast return short signed sizeof static static_cast struct switch template this throw try typedef typeid typename union unsigned using virtual void volatile while ' + COMMON,
+    rust: 'as async await break const continue crate dyn else enum extern fn for if impl in let loop match mod move mut pub ref return self Self static struct super trait type unsafe use where while ' + COMMON,
+    dart: 'abstract as assert async await break case catch class const continue covariant default deferred do dynamic else enum export extends extension external factory final finally for Function get hide if implements import in interface is late library mixin new on operator part required rethrow return set show static super switch sync this throw try typedef var void when while with yield ' + COMMON,
+    csharp: 'abstract as base bool break byte case catch char checked class const continue decimal default delegate do double else enum event explicit extern finally fixed float for foreach goto if implicit in int interface internal is lock long namespace new object operator out override params private protected public readonly ref return sealed short sizeof stackalloc static string struct switch this throw try typeof uint ulong unchecked unsafe ushort using virtual void volatile while var async await record ' + COMMON,
+    go: 'break case chan const continue default defer else fallthrough for func go goto if import interface map package range return select struct switch type var ' + COMMON,
+    swift: 'associatedtype break case catch class continue default defer deinit do else enum extension fallthrough for func guard if import in init inout internal let open operator override private protocol public repeat rethrows return self Self static struct subscript super switch throw throws try typealias var where while ' + COMMON,
+    python: 'and as assert async await break class continue def del elif else except finally for from global if import in is lambda None nonlocal not or pass raise return True False try while with yield self print match case int str float list dict set tuple bool',
+    php: 'abstract and array as break callable case catch class clone const continue declare default do echo else elseif empty enddeclare endfor endforeach endif endswitch endwhile eval exit extends final finally fn for foreach function global goto if implements include include_once instanceof insteadof interface isset list match namespace new or print private protected public readonly require require_once return static switch throw trait try unset use var while xor yield ' + COMMON,
+    shell: 'alias break case cd continue do done elif else esac eval exec exit export fi for function if in local printf read return set shift source then until while echo sudo ' + COMMON,
+    sql: 'add all alter and as asc between by case change column commit constraint create database default delete desc distinct drop else end exists from group having if in index inner insert into is join key left like limit not null on or order outer primary references right rollback select set table then union unique update values view when where with ' + COMMON,
+    yaml: 'true false null yes no on off ',
+    xml: 'xml version encoding standalone',
+    css: 'important media supports keyframes font-face import charset page root',
+    html: 'html head body div span script style link meta title class id href src',
+    md: '',
+    props: '',
+    text: ''
   };
 
   function langOf(path) {
-    const ext = String(path || '').split('.').pop().toLowerCase();
+    const name = String(path || '').split('/').pop();
+    const ext = name.indexOf('.') >= 0 ? name.split('.').pop().toLowerCase() : name.toLowerCase();
+    if (/^build\.gradle\.kts$|^settings\.gradle\.kts$/.test(name)) return 'kotlin';
     for (const key in LANGS) {
       if (LANGS[key].indexOf(ext) >= 0) return key;
     }
@@ -95,22 +141,46 @@
     });
   }
 
+  /* Comment syntax differs per language, so the highlighter picks the marker
+     that language actually uses instead of treating every # as a comment. */
+  const HASH_COMMENT = { python: 1, shell: 1, yaml: 1, props: 1, gradle: 1 };
+  const DASH_COMMENT = { sql: 1 };
+
   function highlightCode(src, lang) {
-    const re = /\/\*[\s\S]*?\*\/|\/\/[^\n]*|#[^\n]*|`(?:\\.|[^`\\])*`|"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'|\b\d+(?:\.\d+)?\b|\b[A-Za-z_$][\w$]*\b/g;
+    const parts = ['\\/\\*[\\s\\S]*?\\*\\/'];
+    if (HASH_COMMENT[lang]) parts.push('#[^\\n]*');
+    else if (DASH_COMMENT[lang]) parts.push('--[^\\n]*');
+    else parts.push('\\/\\/[^\\n]*');
+    parts.push('"""[\\s\\S]*?"""');
+    parts.push("'''[\\s\\S]*?'''");
+    parts.push('`(?:\\\\.|[^`\\\\])*`');
+    parts.push('"(?:\\\\.|[^"\\\\\\n])*"');
+    parts.push("'(?:\\\\.|[^'\\\\\\n])*'");
+    parts.push('\\b\\d+(?:\\.\\d+)?\\b');
+    parts.push('\\b[A-Za-z_$][\\w$]*\\b');
+    const re = new RegExp(parts.join('|'), 'g');
     const keyword = {};
     (KEYWORDS[lang] || '').split(' ').forEach((w) => { if (w) keyword[w] = 1; });
     return tokenize(src, re, {
       plain: (t) => esc(t),
       token: (t) => {
-        if (t.startsWith('/*') || t.startsWith('//')) return span('tok-com', t);
-        if (t[0] === '#' && lang !== 'css') return span('tok-com', t);
-        if (t[0] === '"' || t[0] === "'" || t[0] === '`') return span('tok-str', t);
+        if (/^\/\*|^\/\/|^#|^--/.test(t)) return span('tok-com', t);
+        if (/^["'`]/.test(t)) return span('tok-str', t);
         if (/^\d/.test(t)) return span('tok-num', t);
         if (keyword[t]) return span('tok-key', t);
         if (/^[A-Z][A-Za-z0-9_]*$/.test(t)) return span('tok-fn', t);
         return esc(t);
       }
     });
+  }
+
+  /* YAML has no statements, so keys are what a reader looks for. */
+  function highlightYaml(src) {
+    return src.split('\n').map((line) => {
+      const m = line.match(/^(\s*)([\w.-]+)(\s*:)([\s\S]*)$/);
+      if (!m) return highlightCode(line, 'yaml');
+      return esc(m[1]) + span('tok-attr', m[2]) + esc(m[3]) + highlightCode(m[4], 'yaml');
+    }).join('\n');
   }
 
   function highlightMarkdown(src) {
@@ -128,6 +198,7 @@
     if (lang === 'html' || lang === 'xml') return highlightHTML(src);
     if (lang === 'css') return highlightCSS(src);
     if (lang === 'md') return highlightMarkdown(src);
+    if (lang === 'yaml') return highlightYaml(src);
     if (lang === 'text') return esc(src);
     return highlightCode(src, lang);
   }
@@ -313,6 +384,79 @@
       }
     }
 
+    /* ── words, completion, formatting ── */
+    wordAt() {
+      const ta = this.code;
+      const pos = ta.selectionStart;
+      const value = ta.value;
+      let start = pos;
+      while (start > 0 && /[A-Za-z0-9_$]/.test(value[start - 1])) start--;
+      let end = pos;
+      while (end < value.length && /[A-Za-z0-9_$]/.test(value[end])) end++;
+      return { word: value.slice(start, end), start: start, end: end };
+    }
+
+    /* Candidates come from the language keywords, this file and the rest of
+       the project, so the list shows what the user can actually type. */
+    complete(extraWords) {
+      const at = this.wordAt();
+      const q = at.word.toLowerCase();
+      const seen = {};
+      const out = [];
+      const push = (w, kind) => {
+        if (!w || w.length < 2 || seen[w] || w === at.word) return;
+        if (q && w.toLowerCase().indexOf(q) !== 0) return;
+        seen[w] = 1;
+        out.push({ text: w, kind: kind });
+      };
+      (KEYWORDS[this.lang] || '').split(' ').forEach((w) => push(w, 'keyword'));
+      (this.code.value.match(/[A-Za-z_$][\w$]{1,40}/g) || []).forEach((w) => push(w, 'word'));
+      (extraWords || []).forEach((w) => push(w, 'symbol'));
+      out.sort((a, b) => (a.kind === b.kind ? a.text.localeCompare(b.text)
+        : a.kind === 'keyword' ? -1 : 1));
+      return { items: out.slice(0, 12), at: at };
+    }
+
+    insertCompletion(text) {
+      const at = this.wordAt();
+      const ta = this.code;
+      ta.value = ta.value.slice(0, at.start) + text + ta.value.slice(at.end);
+      const caret = at.start + text.length;
+      ta.setSelectionRange(caret, caret);
+      this._sync();
+      this.focus();
+    }
+
+    /* JSON is reformatted for real (parse + stringify); other languages are
+       re-indented by bracket depth, the same rule the Enter key already uses. */
+    format() {
+      const src = this.code.value;
+      if (!src.trim()) return false;
+      let next = src;
+      if (this.lang === 'json') {
+        try { next = JSON.stringify(JSON.parse(src), null, 2) + '\n'; } catch (e) { next = src; }
+      }
+      if (next === src) {
+        const unit = ' '.repeat(this.tabSize);
+        let depth = 0;
+        next = src.split('\n').map((line) => {
+          const trimmed = line.trim();
+          if (!trimmed) return '';
+          const leadClose = (trimmed.match(/^[}\]\)]/) || []).length;
+          const level = Math.max(0, depth - leadClose);
+          depth = Math.max(0, depth + (trimmed.match(/[{([]/g) || []).length
+            - (trimmed.match(/[})\]]/g) || []).length);
+          return unit.repeat(level) + trimmed;
+        }).join('\n');
+      }
+      if (next === src) return false;
+      const caret = Math.min(this.code.selectionStart, next.length);
+      this.code.value = next;
+      this.code.setSelectionRange(caret, caret);
+      this._sync();
+      return true;
+    }
+
     /* ── find / replace ── */
     find(query, backward) {
       if (!query) return false;
@@ -347,5 +491,11 @@
     }
   }
 
-  window.IdeEditor = { create: (o) => new Editor(o), highlight: highlight, langOf: langOf };
+  window.IdeEditor = {
+    create: (o) => new Editor(o),
+    highlight: highlight,
+    langOf: langOf,
+    langName: (path) => LANG_LABELS[langOf(path)] || 'Plain text',
+    languages: Object.keys(LANG_LABELS).map((id) => ({ id: id, label: LANG_LABELS[id], exts: LANGS[id] || [] }))
+  };
 })();

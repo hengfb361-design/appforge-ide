@@ -154,8 +154,17 @@
     const paths = Object.keys(tpl);
     if (!paths.length || state.list.length !== paths.length) return false;
     for (const p of paths) {
-      const rec = state.files[p];
-      if (!state.list.some((f) => f.path === p) || !rec || rec.text !== tpl[p]) return false;
+      if (!state.list.some((f) => f.path === p)) return false;
+      // Compare against the server's copy: a stale local snapshot must never
+      // decide that an edited file looks untouched.
+      let text = null;
+      try {
+        const r = await api(projectApi('/file') + '?path=' + encodeURIComponent(p));
+        text = r.text;
+      } catch (e) {
+        return false;
+      }
+      if (text !== tpl[p]) return false;
     }
     try {
       for (const p of paths) {
@@ -1825,7 +1834,8 @@
       }
       reloadPreview();
       renderProblems();
-      setStatus('Ready', 'ok');
+      setStatus(state.list.length ? 'Ready' : 'គ្មានឯកសារ — ចុច ＋ ដើម្បីបង្កើត',
+        state.list.length ? 'ok' : '');
       saveLocal();
     } catch (err) {
       state.offline = true;

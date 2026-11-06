@@ -146,6 +146,29 @@
     return true;
   }
 
+  /* Older versions filled every new project with the blank template. When the
+     files are still byte-identical to the generated ones nobody edited them,
+     so the project is turned back into the empty one the user asked for. */
+  async function dropUntouchedTemplate() {
+    const tpl = (TEMPLATES.blank && TEMPLATES.blank.files) || {};
+    const paths = Object.keys(tpl);
+    if (!paths.length || state.list.length !== paths.length) return false;
+    for (const p of paths) {
+      const rec = state.files[p];
+      if (!state.list.some((f) => f.path === p) || !rec || rec.text !== tpl[p]) return false;
+    }
+    try {
+      for (const p of paths) {
+        await api(projectApi('/delete'), { method: 'POST', body: { path: p } });
+        delete state.files[p];
+      }
+    } catch (e) {
+      return false; // leave the tree alone rather than claim a delete that failed
+    }
+    state.list = [];
+    return true;
+  }
+
   async function loadProject() {
     await ensureProject();
     const info = await api(projectApi());
@@ -820,6 +843,44 @@
     }
   };
 
+  /* A new project holds no files: the user creates them, so nothing appears
+     in the tree before they asked for it. */
+  async function createEmptyProject() {
+    const name = await ask({
+      title: 'គម្រោងថ្មី', hint: 'គ្មានឯកសារ — អ្នកបង្កើតដោយខ្លួនឯង',
+      value: 'គម្រោងថ្មី', placeholder: 'ឧ. ហាងខ្ញុំ'
+    });
+    if (name === null) return;
+    try {
+      const created = await api('/api/ide/project', { method: 'POST', key: false, body: { name: name } });
+      state.proj = { id: created.id, key: created.key, name: created.name };
+      state.files = {};
+      state.list = [];
+      state.open = [];
+      state.active = '';
+      state.dirty = {};
+      try { localStorage.setItem(LS.proj, JSON.stringify(state.proj)); } catch (e) {}
+      await loadProject();
+      $('#projName').value = state.proj.name;
+      $('#projLabel').textContent = state.proj.name;
+      $('#emptyState').hidden = false;
+      $('#editor').hidden = true;
+      renderTree();
+      renderTabs();
+      updateStats();
+      toast('គម្រោងទទេ — ចុច ＋ ដើម្បីបង្កើតឯកសារ', 'ok');
+    } catch (err) {
+      toast('បង្កើតគម្រោងមិនបាន: ' + err.message, 'err');
+    }
+  }
+
+  async function newFilePrompt() {
+    const base = state.active ? dirOf(state.active) : '';
+    const path = await ask({ title: 'ឯកសារថ្មី', hint: 'ឈ្មោះ/ផ្លូវ (ឧ. js/app.js)', value: base, placeholder: 'index.html' });
+    if (!path) return;
+    try { await createFile(path); } catch (e) { toast(e.message, 'err'); }
+  }
+
   async function createWithTemplate(templateId) {
     const tpl = TEMPLATES[templateId] || TEMPLATES.blank;
     const name = await ask({
@@ -1409,8 +1470,8 @@
     $('#pvReload').addEventListener('click', reloadPreview);
     $('#btnRun').addEventListener('click', () => { showPreview(true); reloadPreview(); });
 
-    $('#btnNew').addEventListener('click', () => createWithTemplate($('#modalSelect').value || 'blank'));
-    $('#emptyNew').addEventListener('click', () => createWithTemplate('blank'));
+    $('#btnNew').addEventListener('click', createEmptyProject);
+    $('#emptyNew').addEventListener('click', createEmptyProject);
     $('#emptyTemplate').addEventListener('click', chooseTemplate);
     $('#emptyImport').addEventListener('click', () => $('#zipInput').click());
     $('#btnImport').addEventListener('click', () => $('#zipInput').click());
@@ -1435,12 +1496,8 @@
       toast('ឈ្មោះគម្រោង: ' + name, 'ok');
     });
 
-    $('#btnNewFile').addEventListener('click', async () => {
-      const base = state.active ? dirOf(state.active) : '';
-      const path = await ask({ title: 'ឯកសារថ្មី', hint: 'ឈ្មោះ/ផ្លូវ (ឧ. js/app.js)', value: base, placeholder: 'index.html' });
-      if (!path) return;
-      try { await createFile(path); } catch (e) { toast(e.message, 'err'); }
-    });
+    $('#btnNewFile').addEventListener('click', newFilePrompt);
+    if ($('#emptyNewFile')) $('#emptyNewFile').addEventListener('click', newFilePrompt);
     $('#btnNewFolder').addEventListener('click', async () => {
       const base = state.active ? dirOf(state.active) : '';
       const path = await ask({ title: 'ថតថ្មី', hint: 'ឈ្មោះថត (ឧ. assets/img)', value: base, placeholder: 'css' });
@@ -1743,21 +1800,29 @@
 
     try {
       await loadProject();
-      if (!state.list.length) {
-        // A brand-new project: start from the blank template instead of an empty tree.
-        const tpl = TEMPLATES.blank;
-        const paths = Object.keys(tpl.files);
-        for (let i = 0; i < paths.length; i++) {
-          await api(projectApi('/file'), { method: 'PUT', body: { path: paths[i], text: tpl.files[paths[i]] } });
-          state.files[paths[i]] = { text: tpl.files[paths[i]] };
-        }
-        await refreshList();
+      if (state.list.length && await dropUntouchedTemplate()) {
+        state.open = [];
+        state.active = '';
+        renderTabs();
       }
       $('#projName').value = state.proj.name;
       $('#projLabel').textContent = state.proj.name;
       $('#limitsHint').textContent = 'Project ' + state.proj.id.slice(0, 8) + '… · key រក្សាក្នុងឧបករណ៍នេះ';
-      const first = state.list.find((f) => f.path === 'index.html') || state.list.find((f) => !f.binary);
-      if (first) await openFile(first.path);
+      // Nothing is written on arrival: an empty project stays empty until the
+      // user creates a file (or picks a template explicitly).
+      if (state.list.length) {
+        const first = state.list.find((f) => f.path === 'index.html') || state.list.find((f) => !f.binary);
+        if (first) await openFile(first.path);
+      } else {
+        $('#emptyState').hidden = false;
+        $('#editor').hidden = true;
+        $('#tabs').hidden = true;
+        $('#stPath').textContent = '—';
+        $('#stLang').textContent = 'Text';
+        renderTree();
+        updateStats();
+        setStatus('គ្មានឯកសារ — ចុច ＋ ដើម្បីបង្កើត', '');
+      }
       reloadPreview();
       renderProblems();
       setStatus('Ready', 'ok');

@@ -217,6 +217,7 @@
         <div class="tab-tools">
           <button id="btnFormat" class="btn sm" title="Auto-indent / format">⇥ តម្រឹម</button>
           <button id="btnGotoDef" class="btn sm" title="Go to definition">⌖ Definition</button>
+          <button id="btnGotoLine" class="btn sm" title="Go to line (Ctrl+G)"># Line</button>
         </div>
       </div>
 
@@ -235,11 +236,15 @@
             <span><kbd>Ctrl</kbd>+<kbd>S</kbd> save</span>
             <span><kbd>Ctrl</kbd>+<kbd>F</kbd> find</span>
             <span><kbd>Ctrl</kbd>+<kbd>P</kbd> quick open</span>
+            <span><kbd>Ctrl</kbd>+<kbd>G</kbd> go to line</span>
+            <span><kbd>Ctrl</kbd>+<kbd>Tab</kbd> next tab</span>
+            <span><kbd>Ctrl</kbd>+<kbd>W</kbd> close tab</span>
             <span><kbd>Tab</kbd> indent</span>
           </div>
         </div>
 
         <div class="editor" id="editor" hidden>
+          <div class="foldgutter" id="foldGutter" aria-hidden="true"></div>
           <div class="gutter" id="gutter" aria-hidden="true"></div>
           <div class="code-wrap" id="codeWrap">
             <pre class="highlight" id="highlight" aria-hidden="true"><code id="hlCode"></code></pre>
@@ -252,6 +257,9 @@
 
         <div class="findbar" id="findBar" hidden>
           <input id="findInput" class="inp" placeholder="រក…" />
+          <span class="find-count" id="findCount">0/0</span>
+          <button id="findCase" class="btn sm icon" title="Case sensitive">Aa</button>
+          <button id="findRegex" class="btn sm icon" title="Regular expression">.*</button>
           <input id="findReplace" class="inp" placeholder="ជំនួសដោយ…" />
           <button id="findPrev" class="btn sm" title="Previous">↑</button>
           <button id="findNext" class="btn sm" title="Next">↓</button>
@@ -298,8 +306,12 @@
     <span class="st-item" id="stStatus">● Ready</span>
     <span class="st-item st-path" id="stPath">—</span>
     <span class="st-right">
+      <span class="st-item" id="stSel" hidden>0 sel</span>
       <span class="st-item" id="stPos">Ln 1, Col 1</span>
-      <span class="st-item" id="stLang">Text</span>
+      <button class="st-item st-lang" id="stLang" title="ភាសា — ចុចដើម្បីប្តូរ">Text</button>
+      <span class="st-item st-hide-sm" id="stIndent">Spaces: 2</span>
+      <span class="st-item st-hide-sm" id="stEol">LF</span>
+      <span class="st-item st-hide-sm" id="stEnc">UTF-8</span>
       <span class="st-item" id="stBuild">APK: —</span>
     </span>
   </footer>

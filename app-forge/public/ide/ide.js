@@ -13,7 +13,8 @@
     files: 'af.ide.files',
     settings: 'af.ide.settings',
     history: 'af.ide.history',
-    build: 'af.ide.build'
+    build: 'af.ide.build',
+    langs: 'af.ide.langs'
   };
 
   const TEXT_EXT = ['html', 'htm', 'css', 'js', 'mjs', 'json', 'md', 'txt', 'xml',
@@ -33,6 +34,8 @@
     build: { repo: '', url: '', timer: null, busy: false, last: null },
     previewErrors: [],
     syntaxErrors: [],
+    diagEngine: '',
+    langs: {},
     editor: null,
     offline: false
   };
@@ -334,10 +337,11 @@
     state.active = path;
     $('#emptyState').hidden = true;
     $('#editor').hidden = false;
-    state.editor.setLang(path);
+    state.editor.setLang(path, langOverride(path));
     state.editor.setValue(state.files[path].text);
     $('#stPath').textContent = path;
-    $('#stLang').textContent = window.IdeEditor.langName(path);
+    $('#stLang').textContent = window.IdeEditor.langLabel(state.editor.lang);
+    checkSyntax();
     renderTabs();
     renderTree();
     if (line) state.editor.gotoLine(line);
@@ -349,9 +353,10 @@
     if (state.active === path) {
       state.active = state.open[state.open.length - 1] || '';
       if (state.active) {
-        state.editor.setLang(state.active);
+        state.editor.setLang(state.active, langOverride(state.active));
         state.editor.setValue((state.files[state.active] || {}).text || '');
         $('#stPath').textContent = state.active;
+        checkSyntax();
       } else {
         $('#editor').hidden = true;
         $('#emptyState').hidden = false;
@@ -365,8 +370,9 @@
 
   function bindEditor() {
     state.editor = window.IdeEditor.create({
-      gutter: $('#gutter'), pre: $('#highlight'), hl: $('#hlCode'), code: $('#code'),
-      wrapEl: $('#codeWrap'),
+      gutter: $('#gutter'), foldGutter: $('#foldGutter'), pre: $('#highlight'), hl: $('#hlCode'),
+      code: $('#code'), wrapEl: $('#codeWrap'),
+      onStatus: renderStatus,
       onChange: (text) => {
         if (!state.active) return;
         state.files[state.active] = { text: text };
@@ -378,8 +384,11 @@
         if (state.settings.auto) saveSoon();
         if (state.settings.live) reloadPreviewSoon();
       },
-      onCursor: (line, col) => {
+      onCursor: (line, col, info) => {
         $('#stPos').textContent = 'Ln ' + line + ', Col ' + col;
+        const sel = info && info.selected ? info.selected : 0;
+        $('#stSel').hidden = !sel;
+        if (sel) $('#stSel').textContent = sel + ' sel';
       }
     });
     state.editor.setOptions(state.settings);
@@ -431,22 +440,19 @@
     while (el.childNodes.length > 400) el.removeChild(el.firstChild);
   }
 
+  /* Diagnostics come from the editor's own checks: a real parse for JSON and
+     JavaScript, a structural scan elsewhere. The panel names the engine so a
+     highlight is never mistaken for a compiler. */
   const checkSyntax = debounce(() => {
     state.syntaxErrors = [];
+    state.diagEngine = '';
     const path = state.active;
-    if (path && /\.(js|mjs)$/i.test(path)) {
-      const text = (state.files[path] || {}).text || '';
-      // `new Function` rejects module syntax that is valid in a real page.
-      if (text.trim() && !/\b(import|export)\s/.test(text)) {
-        try {
-          new Function(text); // eslint-disable-line no-new-func
-        } catch (e) {
-          const at = /line (\d+)/i.exec(e.message || '');
-          state.syntaxErrors.push({
-            file: path, line: at ? parseInt(at[1], 10) : 0,
-            message: 'SyntaxError: ' + (e.message || 'invalid JavaScript')
-          });
-        }
+    if (path) {
+      const text = (state.files[path] || {}).text;
+      if (typeof text === 'string' && text.length < 400000) {
+        const res = window.IdeEditor.diagnose(text, state.editor ? state.editor.lang : window.IdeEditor.langOf(path));
+        state.diagEngine = res.engine;
+        res.items.forEach((i) => state.syntaxErrors.push({ file: path, line: i.line, message: i.message }));
       }
     }
     renderProblems();
@@ -460,10 +466,12 @@
     }
     $('#problemCount').textContent = String(items.length);
     $('#problemCount').className = 'pill' + (items.length ? ' bad' : ' ok');
-    $('#problems').innerHTML = items.length
+    const engine = state.diagEngine
+      ? '<div class="engine">ការត្រួតពិនិត្យ៖ ' + esc(state.diagEngine) + '</div>' : '';
+    $('#problems').innerHTML = engine + (items.length
       ? items.map((i) => '<div class="prob" data-file="' + esc(i.file) + '" data-line="' + (i.line || 0) + '">' +
           '<span class="err">✖ ' + esc(i.file) + (i.line ? ':' + i.line : '') + ' — ' + esc(i.message) + '</span></div>').join('')
-      : '<span class="ok">✔ គ្មានបញ្ហា</span>';
+      : '<span class="ok">✔ គ្មានបញ្ហា</span>');
     // While a build runs the status bar should keep showing the live percent
     // instead of resetting to "—" every time problems are re-rendered.
     const live = state.build.busy && typeof state.build.pct === 'number'
@@ -617,6 +625,7 @@
       if (opts.options) {
         select.innerHTML = opts.options.map((o) =>
           '<option value="' + esc(o.value) + '">' + esc(o.label) + '</option>').join('');
+        if (opts.value) select.value = opts.value;
       } else {
         input.value = opts.value || '';
         input.placeholder = opts.placeholder || '';
@@ -1573,28 +1582,73 @@
       openFile(row.getAttribute('data-open'), parseInt(row.getAttribute('data-line'), 10)).catch(() => {});
     });
 
-    // find bar
+    // find bar — plain text or regex, case toggle and a live match counter
+    const findOpts = () => ({
+      regex: $('#findRegex').classList.contains('on'),
+      caseSensitive: $('#findCase').classList.contains('on')
+    });
+    const countHits = () => {
+      const q = $('#findInput').value;
+      if (!state.editor || !q) { $('#findCount').textContent = '0/0'; return 0; }
+      const hits = state.editor.searchAll(q, findOpts());
+      $('#findCount').textContent = (state.editor.findIndex >= 0 ? state.editor.findIndex + 1 : 0) + '/' + hits.length;
+      return hits.length;
+    };
+    const doFind = (backward) => {
+      const q = $('#findInput').value;
+      if (!q) return;
+      const r = state.editor.find(q, Object.assign({ backward: backward }, findOpts()));
+      if (!r) { $('#findCount').textContent = '0/0'; toast('រកមិនឃើញ: ' + q, 'err'); return; }
+      $('#findCount').textContent = r.index + '/' + r.count;
+    };
     $('#findClose').addEventListener('click', () => { $('#findBar').hidden = true; state.editor.focus(); });
-    $('#findNext').addEventListener('click', () => state.editor.find($('#findInput').value, false));
-    $('#findPrev').addEventListener('click', () => state.editor.find($('#findInput').value, true));
+    $('#findNext').addEventListener('click', () => doFind(false));
+    $('#findPrev').addEventListener('click', () => doFind(true));
+    $('#findCase').addEventListener('click', (e) => { e.currentTarget.classList.toggle('on'); countHits(); });
+    $('#findRegex').addEventListener('click', (e) => { e.currentTarget.classList.toggle('on'); countHits(); });
+    $('#findInput').addEventListener('input', countHits);
     $('#findReplaceOne').addEventListener('click', () => {
-      state.editor.replaceOne($('#findInput').value, $('#findReplace').value);
+      if (!state.editor.replaceOne($('#findInput').value, $('#findReplace').value, findOpts())) return;
+      countHits();
     });
     $('#findReplaceAll').addEventListener('click', () => {
       const q = $('#findInput').value;
       if (!q) return;
-      const rep = $('#findReplace').value;
-      const text = state.editor.getValue().split(q).join(rep);
-      state.editor.setValue(text);
-      state.files[state.active] = { text: text };
-      state.dirty[state.active] = true;
-      saveFile(state.active);
+      const n = state.editor.replaceAll(q, $('#findReplace').value, findOpts());
+      if (!n) { toast('រកមិនឃើញ: ' + q, 'err'); return; }
+      toast('ជំនួស ' + n + ' កន្លែង', 'ok');
+      countHits();
     });
     $('#findInput').addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        state.editor.find($('#findInput').value, e.shiftKey);
-      }
+      if (e.key === 'Enter') { e.preventDefault(); doFind(e.shiftKey); }
+      if (e.key === 'Escape') { e.preventDefault(); $('#findBar').hidden = true; state.editor.focus(); }
+    });
+
+    // go to line, language switcher
+    const gotoLinePrompt = () => {
+      if (!state.active) { toast('បើកឯកសារមុនសិន', 'err'); return; }
+      ask({ title: 'ទៅបន្ទាត់', hint: 'លេខបន្ទាត់ (1–' + state.editor.lines.length + ')', value: String(state.editor.caret ? state.editor.caret.line : 1) })
+        .then((v) => {
+          const n = parseInt(v, 10);
+          if (!n) return;
+          const at = state.editor.gotoLine(n);
+          $('#stPos').textContent = 'Ln ' + at + ', Col 1';
+        });
+    };
+    $('#btnGotoLine').addEventListener('click', gotoLinePrompt);
+    $('#stLang').addEventListener('click', () => {
+      if (!state.active) return;
+      const detected = window.IdeEditor.langOf(state.active);
+      const opts = [{ value: 'auto', label: 'Auto — ' + window.IdeEditor.langLabel(detected) + ' (តាមកន្ទុយឯកសារ)' }]
+        .concat(window.IdeEditor.languages.map((l) => ({ value: l.id, label: l.label })));
+      ask({ title: 'ភាសារបស់ឯកសារ', hint: state.active, options: opts, value: langOverride(state.active) })
+        .then((id) => {
+          if (!id) return;
+          setLangOverride(state.active, id);
+          state.editor.setLang(state.active, id);
+          $('#stLang').textContent = window.IdeEditor.langLabel(state.editor.lang);
+          toast('ភាសា: ' + window.IdeEditor.langLabel(state.editor.lang), 'ok');
+        });
     });
 
     // editor tools: completion list, auto-indent, go to definition
@@ -1682,6 +1736,18 @@
           $('#findInput').value = state.editor.code.value.slice(state.editor.code.selectionStart, state.editor.code.selectionEnd);
           $('#findInput').focus();
         }
+      } else if (mod && e.key.toLowerCase() === 'g') {
+        e.preventDefault();
+        gotoLinePrompt();
+      } else if (mod && e.key === 'Tab') {
+        e.preventDefault();
+        if (state.open.length > 1) {
+          const i = state.open.indexOf(state.active);
+          const next = state.open[(i + (e.shiftKey ? -1 : 1) + state.open.length) % state.open.length];
+          openFile(next);
+        }
+      } else if (mod && e.key.toLowerCase() === 'w') {
+        if (state.active && !e.altKey) { e.preventDefault(); closeTab(state.active); }
       } else if (mod && e.key.toLowerCase() === 'p') {
         e.preventDefault();
         ask({ title: 'បើកឯកសារ', hint: 'ជ្រើសឯកសារ', options: state.list.filter((f) => !f.binary).map((f) => ({ value: f.path, label: f.path })) })
@@ -1768,7 +1834,34 @@
     try {
       const raw = localStorage.getItem(LS.settings);
       if (raw) Object.assign(state.settings, JSON.parse(raw));
+      const langs = JSON.parse(localStorage.getItem(LS.langs) || '{}');
+      if (langs && typeof langs === 'object') state.langs = langs;
     } catch (e) { /* defaults */ }
+  }
+
+  /* The language is detected from the file extension; clicking the status bar
+     language lets the user override it for that one file and remembers it. */
+  function langOverride(path) {
+    return (path && state.langs[path]) || 'auto';
+  }
+
+  function setLangOverride(path, id) {
+    if (!id || id === 'auto') delete state.langs[path];
+    else state.langs[path] = id;
+    try { localStorage.setItem(LS.langs, JSON.stringify(state.langs)); } catch (e) { /* quota */ }
+  }
+
+  function renderStatus(s) {
+    if (!s) return;
+    $('#stLang').textContent = s.langLabel;
+    $('#stLang').title = 'ភាសា: ' + s.langLabel +
+      (s.lang !== s.detected ? ' (ប្តូរដោយដៃ)' : ' (ស្វ័យប្រវត្តិតាមកន្ទុយឯកសារ)') +
+      ' — ' + (s.encoding || 'UTF-8') + ', ' + s.eol;
+    $('#stIndent').textContent = s.indent;
+    $('#stEol').textContent = s.eol;
+    $('#stEnc').textContent = s.encoding;
+    if (s.large) $('#stStatus').textContent = '● ឯកសារធំ — បំភ្លឺតែផ្នែកដែលឃើញ';
+    $('#editor').classList.toggle('has-folds', (s.folds || 0) > 0);
   }
 
   function loadSnapshot() {

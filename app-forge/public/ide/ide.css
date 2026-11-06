@@ -431,3 +431,26 @@ kbd { background: var(--panel); border: 1px solid var(--border-2); border-bottom
 }
 .ac-item small { color: var(--text-dim); font-size: 10px; }
 .ac-item.on, .ac-item:hover { background: var(--accent-soft); }
+
+/* ── fold gutter, bracket match, status items ───────────────────────────── */
+.foldgutter {
+  flex: 0 0 auto; width: 15px; background: var(--editor); overflow: hidden;
+  border-right: 1px solid var(--border); position: relative; user-select: none;
+}
+.foldgutter .fold-inner { position: relative; width: 100%; }
+.foldgutter .fold {
+  position: absolute; left: 0; width: 15px; height: 18px; padding: 0; border: 0;
+  background: none; color: var(--text-dim); font-size: 10px; line-height: 1;
+  cursor: pointer; opacity: .65;
+}
+.foldgutter .fold:hover { opacity: 1; color: var(--accent); }
+.foldgutter .fold.closed { color: var(--accent); opacity: 1; }
+.brk { background: rgba(56, 139, 253, .25); outline: 1px solid rgba(56, 139, 253, .70); border-radius: 2px; }
+.st-lang { background: none; border: 0; color: inherit; font: inherit; cursor: pointer; padding: 0 2px; border-radius: 4px; }
+.st-lang:hover { background: rgba(255, 255, 255, .18); }
+.find-count { font-size: 11px; color: var(--text-dim); min-width: 34px; text-align: center; font-variant-numeric: tabular-nums; }
+.findbar .btn.on { border-color: var(--accent); color: var(--accent); }
+@media (max-width: 760px) { .st-hide-sm { display: none; } }
+.foldgutter { display: none; }
+.editor.has-folds .foldgutter { display: block; }
+.out .engine { color: var(--text-dim); font-size: 10.5px; letter-spacing: .2px; margin-bottom: 6px; }

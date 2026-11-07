@@ -1763,7 +1763,6 @@
           $('#stPos').textContent = 'Ln ' + at + ', Col 1';
         });
     };
-    $('#btnGotoLine').addEventListener('click', gotoLinePrompt);
     $('#stLang').addEventListener('click', () => {
       if (!state.active) return;
       const detected = window.IdeEditor.langOf(state.active);
@@ -1780,8 +1779,6 @@
     });
 
     // editor tools: completion list, auto-indent, go to definition
-    $('#btnFormat').addEventListener('click', formatDoc);
-    $('#btnGotoDef').addEventListener('click', gotoDefinition);
     $('#code').addEventListener('input', debounce(showAc, 140));
     $('#code').addEventListener('blur', () => setTimeout(hideAc, 120));
     $('#acBox').addEventListener('mousedown', (e) => {

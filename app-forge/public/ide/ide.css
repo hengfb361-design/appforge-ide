@@ -435,8 +435,6 @@ kbd { background: var(--panel); border: 1px solid var(--border-2); border-bottom
 /* ── editor toolbar, autocomplete list ─────────────────────────────────── */
 .tabs-row { display: flex; align-items: stretch; background: var(--bg-2); border-bottom: 1px solid var(--border); }
 .tabs-row .tabs { flex: 1 1 auto; border-bottom: 0; min-width: 0; }
-.tab-tools { display: flex; align-items: center; gap: 4px; padding: 4px 6px; flex: 0 0 auto; }
-.tab-tools .btn { white-space: nowrap; }
 .ac {
   position: absolute; z-index: 60; min-width: 190px; max-width: 320px; max-height: 44vh;
   overflow: auto; background: var(--panel); border: 1px solid var(--border);
@@ -558,11 +556,7 @@ html[data-theme="dark"] .status {
   background: var(--editor-tabbar); color: var(--text-dim); border-top: 1px solid var(--border);
 }
 html[data-theme="dark"] .status #stBuild { color: var(--accent); }
-.tab-tools .btn-lbl { margin-left: 4px; }
 @media (max-width: 900px) {
-  .tab-tools { padding: 3px 4px; gap: 2px; }
-  .tab-tools .btn { padding: 4px 6px; }
-  .tab-tools .btn-lbl { display: none; }
   .gutter { min-width: 34px; padding: 12px 6px 60px 6px; }
   .highlight, .code { font-size: 13px; padding: 12px 12px 60px 4px; }
 }

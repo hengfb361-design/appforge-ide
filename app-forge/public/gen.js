@@ -1454,6 +1454,23 @@
         injected = libs.length;
       }
     }
+    // A project script that never pins a JVM target leaves javac at 1.8 while
+    // Kotlin follows the JDK (17); Gradle refuses to compile those together.
+    if (appScript && typeof appScript.text === 'string' && files.some((f) => /\.kt$/.test(f.path))) {
+      const t = appScript.text;
+      const noOptions = !/compileOptions\s*\{/.test(t);
+      const noJvm = !/jvmTarget/.test(t);
+      if (noOptions || noJvm) {
+        const block = ['', 'android {'];
+        if (noOptions) {
+          block.push('    compileOptions {', '        sourceCompatibility JavaVersion.VERSION_17',
+            '        targetCompatibility JavaVersion.VERSION_17', '    }');
+        }
+        if (noJvm) block.push('    kotlinOptions {', "        jvmTarget = '17'", '    }');
+        block.push('}');
+        appScript.text = t.replace(/\s*$/, '\n') + block.join('\n') + '\n';
+      }
+    }
     if (injected) {
       const props = files.filter((f) => f.path === 'gradle.properties')[0];
       if (props && typeof props.text === 'string' && !/android\.useAndroidX\s*=\s*true/.test(props.text)) {

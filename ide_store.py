@@ -131,8 +131,11 @@ def clean_path(raw, allow_empty: bool = False) -> str:
             raise ValueError("path មិនត្រឹមត្រូវ")
         if len(part) > 100:
             raise ValueError("ឈ្មោះវែងពេក")
-        if part.startswith(".git"):
-            raise ValueError("ថត .git មិនអនុញ្ញាត")
+        # Only the VCS metadata folders are off limits. A name like
+        # ".gitignore" or ".github" is a normal project file and used by every
+        # generated Android template.
+        if part.lower() in (".git", ".svn", ".hg"):
+            raise ValueError("ថត " + part + " មិនអនុញ្ញាត")
     return "/".join(parts)
 
 

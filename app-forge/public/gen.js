@@ -16,6 +16,7 @@
     { id: 'native', label: 'Native Android (Kotlin)', desc: 'Activity + XML layout ដែលរត់លើ Android ដោយផ្ទាល់', icon: '🤖' },
     { id: 'java', label: 'Native Android (Java)', desc: 'គម្រោង Java + XML សម្រាប់ Android', icon: '☕' },
     { id: 'ndk', label: 'C/C++ Android NDK', desc: 'JNI + CMake — កូដ C++ ក្លាយជា .so ក្នុង APK', icon: '⚙️' },
+    { id: 'system', label: 'System App (Android)', desc: 'Overlay, Device Admin, boot service, shell/root — ជម្រៅប្រព័ន្ធ Android', icon: '🛡️' },
     { id: 'notes', label: 'App កត់ត្រា', desc: 'សរសេរ/លុបកំណត់ត្រា រក្សាទុកក្នុងទូរស័ព្ទ', icon: '📝' }
   ];
 
@@ -218,6 +219,44 @@
       // Bundled assets still need INTERNET when the page calls an API.
       perms.unshift('INTERNET');
     }
+    // A system utility needs permissions that only show up in Settings, so the
+    // scaffold declares them from the start and links the user to each toggle.
+    if (c.template === 'system') {
+      ['SYSTEM_ALERT_WINDOW', 'WRITE_SETTINGS', 'PACKAGE_USAGE_STATS',
+        'KILL_BACKGROUND_PROCESSES', 'RECEIVE_BOOT_COMPLETED', 'FOREGROUND_SERVICE',
+        'FOREGROUND_SERVICE_SPECIAL_USE', 'REQUEST_IGNORE_BATTERY_OPTIMIZATIONS',
+        'QUERY_ALL_PACKAGES', 'WAKE_LOCK', 'POST_NOTIFICATIONS'].forEach((p) => {
+        if (perms.indexOf(p) < 0) perms.push(p);
+      });
+    }
+    const systemParts = c.template === 'system' ? [
+      '        <receiver',
+      '            android:name=".AdminReceiver"',
+      '            android:permission="android.permission.BIND_DEVICE_ADMIN"',
+      '            android:exported="true">',
+      '            <meta-data',
+      '                android:name="android.app.device_admin"',
+      '                android:resource="@xml/device_admin" />',
+      '            <intent-filter>',
+      '                <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />',
+      '            </intent-filter>',
+      '        </receiver>',
+      '        <receiver',
+      '            android:name=".BootReceiver"',
+      '            android:exported="true">',
+      '            <intent-filter>',
+      '                <action android:name="android.intent.action.BOOT_COMPLETED" />',
+      '            </intent-filter>',
+      '        </receiver>',
+      '        <service',
+      '            android:name=".OverlayService"',
+      '            android:exported="false"',
+      '            android:foregroundServiceType="specialUse">',
+      '            <property',
+      '                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"',
+      '                android:value="system overlay utility" />',
+      '        </service>'
+    ].join('\n') : null;
     const permLines = perms.map((p) =>
       '    <uses-permission android:name="android.permission.' + p + '" />');
     const appAttrs = [
@@ -244,6 +283,7 @@
       '                <category android:name="android.intent.category.LAUNCHER" />',
       '            </intent-filter>',
       '        </activity>',
+      systemParts,
       '    </application>',
       '</manifest>',
       ''
@@ -744,6 +784,322 @@
     ].join('\n');
   }
 
+  /* ── system template: overlay, device admin, boot service, shell/root ──── */
+
+  function activitySystemXml() {
+    const button = (id, text) => [
+      '        <Button',
+      '            android:id="@+id/' + id + '"',
+      '            android:layout_width="match_parent"',
+      '            android:layout_height="wrap_content"',
+      '            android:layout_marginTop="8dp"',
+      '            android:text="' + text + '" />'
+    ];
+    return [
+      '<?xml version="1.0" encoding="utf-8"?>',
+      '<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"',
+      '    android:layout_width="match_parent"',
+      '    android:layout_height="match_parent"',
+      '    android:fillViewport="true">',
+      '',
+      '    <LinearLayout',
+      '        android:layout_width="match_parent"',
+      '        android:layout_height="wrap_content"',
+      '        android:orientation="vertical"',
+      '        android:padding="20dp">',
+      '',
+      '        <TextView',
+      '            android:id="@+id/status"',
+      '            android:layout_width="match_parent"',
+      '            android:layout_height="wrap_content"',
+      '            android:paddingBottom="12dp"',
+      '            android:textSize="13sp"',
+      '            android:text="checking" />',
+      ''
+    ].concat(
+      button('btnOverlay', 'Off បើកសិទ្ធិ Overlay'),
+      button('btnWriteSettings', 'សិទ្ធិសរសេរ Settings'),
+      button('btnAdmin', 'ធ្វើជា Device Admin'),
+      button('btnService', 'ចាប់ផ្ដើម Overlay Service'),
+      button('btnShell', 'សាក Shell / Root')
+    ).concat([
+      '    </LinearLayout>',
+      '</ScrollView>',
+      ''
+    ]).join('\n');
+  }
+
+  function mainActivitySystem(c) {
+    return [
+      'package ' + c.pkg,
+      '',
+      'import android.app.admin.DevicePolicyManager',
+      'import android.content.ComponentName',
+      'import android.content.Context',
+      'import android.content.Intent',
+      'import android.net.Uri',
+      'import android.os.Bundle',
+      'import android.provider.Settings',
+      'import android.widget.Button',
+      'import android.widget.TextView',
+      'import androidx.appcompat.app.AppCompatActivity',
+      'import androidx.core.content.ContextCompat',
+      '',
+      '/** Entry screen: every deep permission is requested explicitly and the',
+      '    result stays visible in the status line. */',
+      'class MainActivity : AppCompatActivity() {',
+      '    private lateinit var status: TextView',
+      '',
+      '    override fun onCreate(savedInstanceState: Bundle?) {',
+      '        super.onCreate(savedInstanceState)',
+      '        setContentView(R.layout.activity_system)',
+      '        status = findViewById(R.id.status)',
+      '        findViewById<Button>(R.id.btnOverlay).setOnClickListener { askOverlay() }',
+      '        findViewById<Button>(R.id.btnWriteSettings).setOnClickListener { askWriteSettings() }',
+      '        findViewById<Button>(R.id.btnAdmin).setOnClickListener { askAdmin() }',
+      '        findViewById<Button>(R.id.btnService).setOnClickListener { startOverlay() }',
+      '        findViewById<Button>(R.id.btnShell).setOnClickListener { probeShell() }',
+      '        show("root: " + SystemOps.isRooted() + " · overlay: " + canOverlay())',
+      '    }',
+      '',
+      '    private fun canOverlay(): Boolean = Settings.canDrawOverlays(this)',
+      '',
+      '    private fun show(text: String) {',
+      '        status.text = text',
+      '    }',
+      '',
+      '    private fun askOverlay() {',
+      '        if (canOverlay()) { show("overlay: មានសិទ្ធិរួចហើយ"); return }',
+      '        val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,',
+      '            Uri.parse("package:" + packageName))',
+      '        startActivity(intent)',
+      '    }',
+      '',
+      '    private fun askWriteSettings() {',
+      '        val intent = Intent(Settings.ACTION_MANAGE_WRITE_SETTINGS,',
+      '            Uri.parse("package:" + packageName))',
+      '        startActivity(intent)',
+      '    }',
+      '',
+      '    private fun askAdmin() {',
+      '        val admin = ComponentName(this, AdminReceiver::class.java)',
+      '        val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager',
+      '        if (dpm.isAdminActive(admin)) { show("device admin: សកម្មរួចហើយ"); return }',
+      '        val intent = Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN)',
+      '        intent.putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, admin)',
+      '        intent.putExtra(DevicePolicyManager.EXTRA_ADD_EXPLANATION, "សម្រាប់មុខងារប្រព័ន្ធ")',
+      '        startActivity(intent)',
+      '    }',
+      '',
+      '    private fun startOverlay() {',
+      '        ContextCompat.startForegroundService(this, Intent(this, OverlayService::class.java))',
+      '        show("overlay service: កំពុងដំណើរការ")',
+      '    }',
+      '',
+      '    private fun probeShell() {',
+      '        val rooted = SystemOps.isRooted()',
+      '        val out = if (rooted) SystemOps.runAsRoot("id") else SystemOps.shell("sh", "-c", "id")',
+      '        val battery = SystemOps.batteryExempt(this)',
+      '        show("root: " + rooted + " · id: " + out.output + " · battery exempt: " + battery)',
+      '    }',
+      '}',
+      ''
+    ].join('\n');
+  }
+
+  function systemOpsKt(c) {
+    return [
+      'package ' + c.pkg,
+      '',
+      'import android.app.ActivityManager',
+      'import android.content.Context',
+      'import android.os.PowerManager',
+      'import android.provider.Settings',
+      '',
+      '/** Shell, root and settings helpers. Root commands only work on a rooted',
+      '    phone or a platform-signed build; without them each call fails cleanly. */',
+      'object SystemOps {',
+      '    data class ShellResult(val ok: Boolean, val output: String)',
+      '',
+      '    fun shell(vararg command: String): ShellResult {',
+      '        return try {',
+      '            val process = ProcessBuilder(*command).redirectErrorStream(true).start()',
+      '            val text = process.inputStream.bufferedReader().use { it.readText() }',
+      '            val code = process.waitFor()',
+      '            ShellResult(code == 0, text.trim())',
+      '        } catch (e: Exception) {',
+      '            ShellResult(false, e.message ?: "shell failed")',
+      '        }',
+      '    }',
+      '',
+      '    fun runAsRoot(command: String): ShellResult = shell("su", "-c", command)',
+      '',
+      '    fun isRooted(): Boolean {',
+      '        val probe = runAsRoot("id")',
+      '        return probe.ok && probe.output.contains("uid=0")',
+      '    }',
+      '',
+      '    fun writeSetting(context: Context, key: String, value: String): ShellResult {',
+      '        return try {',
+      '            val ok = Settings.System.putString(context.contentResolver, key, value)',
+      '            ShellResult(ok, key + " = " + value)',
+      '        } catch (e: Exception) {',
+      '            ShellResult(false, e.message ?: "WRITE_SETTINGS denied")',
+      '        }',
+      '    }',
+      '',
+      '    fun killBackground(context: Context, target: String): ShellResult {',
+      '        return try {',
+      '            val am = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager',
+      '            am.killBackgroundProcesses(target)',
+      '            ShellResult(true, "killed " + target)',
+      '        } catch (e: Exception) {',
+      '            ShellResult(false, e.message ?: "kill failed")',
+      '        }',
+      '    }',
+      '',
+      '    fun batteryExempt(context: Context): Boolean {',
+      '        val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager',
+      '        return pm.isIgnoringBatteryOptimizations(context.packageName)',
+      '    }',
+      '}',
+      ''
+    ].join('\n');
+  }
+
+  function overlayServiceKt(c) {
+    return [
+      'package ' + c.pkg,
+      '',
+      'import android.app.Notification',
+      'import android.app.NotificationChannel',
+      'import android.app.NotificationManager',
+      'import android.app.Service',
+      'import android.content.Intent',
+      'import android.graphics.PixelFormat',
+      'import android.os.IBinder',
+      'import android.provider.Settings',
+      'import android.view.Gravity',
+      'import android.view.WindowManager',
+      'import android.widget.TextView',
+      'import androidx.core.app.NotificationCompat',
+      '',
+      '/** Foreground service that draws a floating overlay above other apps. */',
+      'class OverlayService : Service() {',
+      '    private var view: TextView? = null',
+      '    private var manager: WindowManager? = null',
+      '',
+      '    override fun onBind(intent: Intent?): IBinder? = null',
+      '',
+      '    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {',
+      '        startForeground(NOTIFICATION_ID, notification())',
+      '        if (view == null) showOverlay()',
+      '        return START_STICKY',
+      '    }',
+      '',
+      '    private fun notification(): Notification {',
+      '        val nm = getSystemService(NotificationManager::class.java)',
+      '        nm.createNotificationChannel(',
+      '            NotificationChannel(CHANNEL_ID, "System overlay", NotificationManager.IMPORTANCE_LOW)',
+      '        )',
+      '        return NotificationCompat.Builder(this, CHANNEL_ID)',
+      '            .setContentTitle("AppForge system app")',
+      '            .setContentText("Overlay service is running")',
+      '            .setSmallIcon(android.R.drawable.ic_dialog_info)',
+      '            .setOngoing(true)',
+      '            .build()',
+      '    }',
+      '',
+      '    private fun showOverlay() {',
+      '        if (!Settings.canDrawOverlays(this)) return',
+      '        val wm = getSystemService(WINDOW_SERVICE) as WindowManager',
+      '        manager = wm',
+      '        val label = TextView(this)',
+      '        label.text = "AppForge overlay"',
+      '        label.textSize = 14f',
+      '        val params = WindowManager.LayoutParams(',
+      '            WindowManager.LayoutParams.WRAP_CONTENT,',
+      '            WindowManager.LayoutParams.WRAP_CONTENT,',
+      '            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,',
+      '            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,',
+      '            PixelFormat.TRANSLUCENT',
+      '        )',
+      '        params.gravity = Gravity.TOP or Gravity.START',
+      '        params.x = 24',
+      '        params.y = 120',
+      '        wm.addView(label, params)',
+      '        view = label',
+      '    }',
+      '',
+      '    override fun onDestroy() {',
+      '        view?.let { manager?.removeView(it) }',
+      '        view = null',
+      '        super.onDestroy()',
+      '    }',
+      '',
+      '    companion object {',
+      '        const val CHANNEL_ID = "system_overlay"',
+      '        const val NOTIFICATION_ID = 42',
+      '    }',
+      '}',
+      ''
+    ].join('\n');
+  }
+
+  function adminReceiverKt(c) {
+    return [
+      'package ' + c.pkg,
+      '',
+      'import android.app.admin.DeviceAdminReceiver',
+      'import android.content.Context',
+      'import android.content.Intent',
+      'import android.widget.Toast',
+      '',
+      'class AdminReceiver : DeviceAdminReceiver() {',
+      '    override fun onEnabled(context: Context, intent: Intent) {',
+      '        Toast.makeText(context, "Device admin enabled", Toast.LENGTH_SHORT).show()',
+      '    }',
+      '',
+      '    override fun onDisabled(context: Context, intent: Intent) {',
+      '        Toast.makeText(context, "Device admin disabled", Toast.LENGTH_SHORT).show()',
+      '    }',
+      '}',
+      ''
+    ].join('\n');
+  }
+
+  function bootReceiverKt(c) {
+    return [
+      'package ' + c.pkg,
+      '',
+      'import android.content.BroadcastReceiver',
+      'import android.content.Context',
+      'import android.content.Intent',
+      'import androidx.core.content.ContextCompat',
+      '',
+      'class BootReceiver : BroadcastReceiver() {',
+      '    override fun onReceive(context: Context, intent: Intent) {',
+      '        if (intent.action == Intent.ACTION_BOOT_COMPLETED) {',
+      '            ContextCompat.startForegroundService(context, Intent(context, OverlayService::class.java))',
+      '        }',
+      '    }',
+      '}',
+      ''
+    ].join('\n');
+  }
+
+  function deviceAdminXml() {
+    return [
+      '<?xml version="1.0" encoding="utf-8"?>',
+      '<device-admin xmlns:android="http://schemas.android.com/apk/res/android">',
+      '    <uses-policies>',
+      '        <force-lock />',
+      '    </uses-policies>',
+      '</device-admin>',
+      ''
+    ].join('\n');
+  }
+
   function workflowYaml(c) {
     const target = c.target || 'debug';
     const signed = target !== 'debug';
@@ -860,7 +1216,20 @@
       '  ដែលបានដាក់ឱ្យរួចហើយ។',
       '- Package name: `' + c.pkg + '` · Version ' + c.versionName + ' (' + c.versionCode + ')',
       ''
-    ].join('\n');
+    ].concat(c.template === 'system' ? [
+      '## System app — អ្វីដែលដំណើរការ និងអ្វីដែលត្រូវការ root',
+      '',
+      '- **ដំណើរការធម្មតា (គ្មាន root):** Device Admin, Overlay (សុំសិទ្ធិក្នុង Settings),',
+      '  Foreground service និងការចាប់ផ្ដើមពេលបើកទូរស័ព្ទ, ការសរសេរ Settings ដែលអនុញ្ញាត,',
+      '  ការសម្អាត background processes និងការលើកលែង battery optimization។',
+      '- **ត្រូវការ root៖** `SystemOps.runAsRoot(...)` និងពាក្យបញ្ជា `su -c`, ការដំឡើងជា',
+      '  system app ក្នុង `/system/priv-app`, និង permission កម្រិត signature (platform key)។',
+      '- App ធម្មតាដំឡើងជា user app មិនអាចទទួល permission កម្រិត signature បានទេ —',
+      '  ត្រូវ sign ដោយ key របស់ ROM ឬដាក់ក្នុង `/system/priv-app` ដោយមាន root/custom ROM។',
+      '- កូដទាំងអស់នៅក្នុង `app/src/main/java/...` — អ្នកអាចបន្ថែម file ថ្មីក្នុង IDE',
+      '  ហើយ Gradle នឹង compile វាដោយស្វ័យប្រវត្តិ។',
+      ''
+    ] : []).join('\n');
   }
 
   function gitignore() {
@@ -921,6 +1290,14 @@
       add('app/src/main/res/layout/activity_main.xml', activityNativeXml());
       add('app/src/main/cpp/CMakeLists.txt', cmakeLists());
       add('app/src/main/cpp/native-lib.cpp', nativeLibCpp(c));
+    } else if (c.template === 'system') {
+      add(srcDir + '/MainActivity.kt', mainActivitySystem(c));
+      add(srcDir + '/SystemOps.kt', systemOpsKt(c));
+      add(srcDir + '/OverlayService.kt', overlayServiceKt(c));
+      add(srcDir + '/AdminReceiver.kt', adminReceiverKt(c));
+      add(srcDir + '/BootReceiver.kt', bootReceiverKt(c));
+      add('app/src/main/res/layout/activity_system.xml', activitySystemXml());
+      add('app/src/main/res/xml/device_admin.xml', deviceAdminXml());
     } else {
       add(srcDir + '/MainActivity.kt', mainActivityBlank(c));
       add('app/src/main/res/layout/activity_main.xml', activityBlankXml(c));
@@ -1507,7 +1884,7 @@
     ];
     required.forEach((p) => { if (!map[p]) issues.push('ខ្វះ ' + p); });
 
-    if (!files.some((f) => f.path.endsWith('MainActivity.kt'))) issues.push('ខ្វះ MainActivity.kt');
+    if (!files.some((f) => /MainActivity\.(kt|java)$/.test(f.path))) issues.push('ខ្វះ MainActivity (kt/java)');
 
     const gradle = map['app/build.gradle.kts'] || '';
     if (cfg.pkg && !gradle.includes('applicationId = "' + cfg.pkg + '"')) issues.push('applicationId មិនត្រូវនឹង package');
@@ -1532,6 +1909,19 @@
 
     const theme = 'Theme.' + pascal(cfg.name || 'My App');
     const manifest = map['app/src/main/AndroidManifest.xml'] || '';
+
+    if (cfg.template === 'system') {
+      ['SYSTEM_ALERT_WINDOW', 'FOREGROUND_SERVICE_SPECIAL_USE', 'RECEIVE_BOOT_COMPLETED',
+        'WRITE_SETTINGS'].forEach((p) => {
+        if (!manifest.includes('android.permission.' + p)) issues.push('ខ្វះ permission ' + p);
+      });
+      if (!manifest.includes('.OverlayService')) issues.push('ខ្វះ service OverlayService');
+      if (!manifest.includes('.BootReceiver')) issues.push('ខ្វះ receiver BootReceiver');
+      if (!manifest.includes('.AdminReceiver')) issues.push('ខ្វះ receiver AdminReceiver');
+      ['OverlayService.kt', 'SystemOps.kt', 'AdminReceiver.kt', 'BootReceiver.kt'].forEach((f) => {
+        if (!files.some((x) => x.path.endsWith('/' + f))) issues.push('ខ្វះ ' + f);
+      });
+    }
     const themes = map['app/src/main/res/values/themes.xml'] || '';
     if (manifest.includes('@style/' + theme) && !themes.includes('name="' + theme + '"')) {
       issues.push('theme ' + theme + ' មិនមានក្នុង themes.xml');

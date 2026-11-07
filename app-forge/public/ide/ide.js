@@ -758,6 +758,7 @@
     nativeKotlin: { label: 'Native Android (Kotlin)', gen: 'native' },
     javaNative: { label: 'Native Android (Java)', gen: 'java' },
     ndkCpp: { label: 'C/C++ Android NDK', gen: 'ndk' },
+    systemApp: { label: 'System App (Android)', gen: 'system' },
     blank: {
       label: 'Blank Web App',
       files: {

@@ -24,6 +24,8 @@
     proj: null,
     files: {},
     list: [],
+    dirs: [],
+    selectedDir: '',
     open: [],
     active: '',
     dirty: {},
@@ -244,8 +246,16 @@
 
   /* ──────────────────────────────── tree ───────────────────────────────── */
 
-  function buildTree(list) {
+  function buildTree(list, dirs) {
     const root = { dirs: {}, files: [] };
+    // Folders come from the server as well, so an empty folder stays visible.
+    (dirs || []).forEach((d) => {
+      let node = root;
+      String(d).split('/').filter(Boolean).forEach((name) => {
+        if (!node.dirs[name]) node.dirs[name] = { dirs: {}, files: [] };
+        node = node.dirs[name];
+      });
+    });
     list.forEach((f) => {
       const parts = f.path.split('/');
       let node = root;
@@ -265,7 +275,8 @@
   };
 
   function renderTree() {
-    const root = buildTree(state.list);
+    const root = buildTree(state.list, state.dirs);
+    const sel = state.selectedDir;
     const html = [];
     function walk(node, prefix) {
       Object.keys(node.dirs).sort().forEach((name) => {
@@ -281,16 +292,35 @@
     function row(kind, path, label, closed) {
       const icon = kind === 'dir' ? (closed ? '📁' : '📂') : (ICONS[ext(path)] || '📄');
       const on = path === state.active ? ' on' : '';
-      return '<div class="tree-row' + on + '" data-kind="' + kind + '" data-path="' + esc(path) + '">' +
+      const picked = kind === 'dir' && path === sel ? ' sel' : '';
+      const acts = kind === 'dir'
+        ? '<span class="dact">' +
+          '<button class="mini" data-addfile="' + esc(path) + '" title="ឯកសារថ្មីក្នុងថតនេះ">📄+</button>' +
+          '<button class="mini" data-addfolder="' + esc(path) + '" title="ថតរងថ្មី">📁+</button>' +
+          '</span>'
+        : '';
+      return '<div class="tree-row' + on + picked + '" data-kind="' + kind + '" data-path="' + esc(path) + '">' +
         '<span class="tw">' + (kind === 'dir' ? (closed ? '▸' : '▾') : '') + '</span>' +
         '<span class="ic">' + icon + '</span>' +
         '<span class="nm">' + esc(label) + '</span>' +
+        acts +
         '<button class="more" data-more="' + esc(path) + '" data-dir="' + (kind === 'dir' ? '1' : '') + '" title="More">⋯</button>' +
         '</div>';
     }
     walk(root, '');
     $('#tree').innerHTML = html.length ? html.join('') : '<div class="tree-empty">គ្មានឯកសារ — ចុច 📄+ ដើម្បីបង្កើត</div>';
+    renderDirTarget();
     updateStats();
+  }
+
+  // The explorer shows the folder that new files will land in, so "add file"
+  // never has to ask again where it should go.
+  function renderDirTarget() {
+    const bar = $('#dirTarget');
+    if (!bar) return;
+    const dir = state.selectedDir;
+    bar.hidden = !dir;
+    if (dir) $('#dirTargetName').textContent = dir + '/';
   }
 
   function updateStats() {
@@ -483,28 +513,46 @@
 
   /* ─────────────────────────────── files ops ───────────────────────────── */
 
+  function hasDir(path) {
+    if (!path) return true;
+    if (state.dirs.indexOf(path) >= 0) return true;
+    return state.list.some((f) => f.path.indexOf(path + '/') === 0);
+  }
+
   async function refreshList() {
     const info = await api(projectApi());
     state.list = info.files || [];
+    state.dirs = Array.isArray(info.dirs) ? info.dirs.slice() : [];
+    if (state.selectedDir && !hasDir(state.selectedDir)) state.selectedDir = '';
     await loadMissingText();
     renderTree();
     saveLocal();
   }
 
   async function createFile(path, text) {
-    const p = path.replace(/^\.?\//, '');
+    const p = String(path || '').replace(/^\.?\//, '').replace(/^\/+/, '');
+    if (!p) throw new Error('ឈ្មោះឯកសារទទេ');
     await api(projectApi('/file'), { method: 'PUT', body: { path: p, text: text || '' } });
     state.files[p] = { text: text || '' };
+    expandTo(p);
     await refreshList();
     await openFile(p);
     toast('បង្កើត ' + p, 'ok');
+    return p;
   }
 
   async function createFolder(path) {
-    const p = path.replace(/^\.?\//, '');
-    await api(projectApi('/mkdir'), { method: 'POST', body: { path: p } });
+    const p = String(path || '').replace(/^\.?\//, '').replace(/^\/+/, '').replace(/\/+$/, '');
+    if (!p) throw new Error('ឈ្មោះថតទទេ');
+    const res = await api(projectApi('/mkdir'), { method: 'POST', body: { path: p } });
+    const saved = (res && res.path) || p;
+    delete state.collapsed[saved];
     await refreshList();
-    toast('បង្កើតថត ' + p, 'ok');
+    if (!hasDir(saved)) state.dirs.push(saved);
+    state.selectedDir = saved;
+    renderTree();
+    toast('បង្កើតថត ' + saved, 'ok');
+    return saved;
   }
 
   function movedPath(path, from, to) {
@@ -520,6 +568,8 @@
       delete state.files[p];
     });
     state.open = state.open.map((p) => movedPath(p, from, to));
+    state.dirs = state.dirs.map((d) => movedPath(d, from, to));
+    if (state.selectedDir) state.selectedDir = movedPath(state.selectedDir, from, to);
     if (movedPath(state.active, from, to) !== state.active) state.active = movedPath(state.active, from, to);
     await refreshList();
     if (state.active) await openFile(state.active);
@@ -529,6 +579,8 @@
   async function deleteEntry(path) {
     if (!window.confirm('លុប "' + path + '" ?')) return;
     await api(projectApi('/delete'), { method: 'POST', body: { path: path } });
+    state.dirs = state.dirs.filter((d) => d !== path && d.indexOf(path + '/') !== 0);
+    if (state.selectedDir === path || state.selectedDir.indexOf(path + '/') === 0) state.selectedDir = '';
     Object.keys(state.files).forEach((p) => {
       if (p === path || p.indexOf(path + '/') === 0) delete state.files[p];
     });
@@ -892,11 +944,24 @@
     }
   }
 
-  async function newFilePrompt() {
-    const base = state.active ? dirOf(state.active) : '';
-    const path = await ask({ title: 'ឯកសារថ្មី', hint: 'ឈ្មោះ/ផ្លូវ (ឧ. js/app.js)', value: base, placeholder: 'index.html' });
+  function dirBase(baseDir) {
+    const dir = baseDir === undefined || baseDir === null ? state.selectedDir : String(baseDir);
+    if (dir) return dir.replace(/\/+$/, '') + '/';
+    return state.active ? dirOf(state.active) : '';
+  }
+
+  async function newFilePrompt(baseDir) {
+    if (baseDir && baseDir.preventDefault) baseDir = undefined; // ignore click events
+    const path = await ask({ title: 'ឯកសារថ្មី', hint: 'ឈ្មោះ/ផ្លូវ (ឧ. js/app.js)', value: dirBase(baseDir), placeholder: 'index.html' });
     if (!path) return;
     try { await createFile(path); } catch (e) { toast(e.message, 'err'); }
+  }
+
+  async function newFolderPrompt(baseDir) {
+    if (baseDir && baseDir.preventDefault) baseDir = undefined;
+    const path = await ask({ title: 'ថតថ្មី', hint: 'ឈ្មោះថត (ឧ. assets/img)', value: dirBase(baseDir), placeholder: 'css' });
+    if (!path) return;
+    try { await createFolder(path); } catch (e) { toast(e.message, 'err'); }
   }
 
   async function createWithTemplate(templateId) {
@@ -1514,14 +1579,12 @@
       toast('ឈ្មោះគម្រោង: ' + name, 'ok');
     });
 
-    $('#btnNewFile').addEventListener('click', newFilePrompt);
-    if ($('#emptyNewFile')) $('#emptyNewFile').addEventListener('click', newFilePrompt);
-    $('#btnNewFolder').addEventListener('click', async () => {
-      const base = state.active ? dirOf(state.active) : '';
-      const path = await ask({ title: 'ថតថ្មី', hint: 'ឈ្មោះថត (ឧ. assets/img)', value: base, placeholder: 'css' });
-      if (!path) return;
-      try { await createFolder(path); } catch (e) { toast(e.message, 'err'); }
-    });
+    $('#btnNewFile').addEventListener('click', () => newFilePrompt());
+    if ($('#emptyNewFile')) $('#emptyNewFile').addEventListener('click', () => newFilePrompt());
+    $('#btnNewFolder').addEventListener('click', () => newFolderPrompt());
+    if ($('#btnAddFileHere')) $('#btnAddFileHere').addEventListener('click', () => newFilePrompt(state.selectedDir));
+    if ($('#btnAddFolderHere')) $('#btnAddFolderHere').addEventListener('click', () => newFolderPrompt(state.selectedDir));
+    if ($('#dirTargetClear')) $('#dirTargetClear').addEventListener('click', () => { state.selectedDir = ''; renderTree(); });
     $('#btnRefresh').addEventListener('click', async () => {
       try { await refreshList(); toast('ធ្វើបច្ចុប្បន្នភាពរួច', 'ok'); } catch (e) { toast(e.message, 'err'); }
     });
@@ -1549,18 +1612,44 @@
     });
 
     $('#tree').addEventListener('click', async (e) => {
+      const addFile = e.target.closest('[data-addfile]');
+      if (addFile) {
+        e.stopPropagation();
+        state.selectedDir = addFile.getAttribute('data-addfile');
+        renderTree();
+        newFilePrompt(state.selectedDir);
+        return;
+      }
+      const addDir = e.target.closest('[data-addfolder]');
+      if (addDir) {
+        e.stopPropagation();
+        state.selectedDir = addDir.getAttribute('data-addfolder');
+        renderTree();
+        newFolderPrompt(state.selectedDir);
+        return;
+      }
       const more = e.target.closest('[data-more]');
       if (more) {
         e.stopPropagation();
+        state.selectedDir = more.getAttribute('data-dir') ? more.getAttribute('data-more') : '';
+        renderTree();
         openMenu(more.getAttribute('data-more'), more);
         return;
       }
       if (e.target.closest('.ctx')) return;
       const row = e.target.closest('.tree-row');
-      if (!row) return;
+      if (!row) {
+        if (state.selectedDir) { state.selectedDir = ''; renderTree(); }
+        return;
+      }
       const path = row.getAttribute('data-path');
       if (row.getAttribute('data-kind') === 'dir') {
-        state.collapsed[path] = !state.collapsed[path];
+        if (state.selectedDir !== path) {
+          state.selectedDir = path;
+          delete state.collapsed[path];
+        } else {
+          state.collapsed[path] = !state.collapsed[path];
+        }
         renderTree();
       } else {
         try { await openFile(path); } catch (err) { toast(err.message, 'err'); }
@@ -1780,7 +1869,10 @@
     const rect = anchor.getBoundingClientRect();
     menu.style.left = Math.min(rect.left, window.innerWidth - 170) + 'px';
     menu.style.top = Math.min(rect.bottom + 4, window.innerHeight - 190) + 'px';
-    const items = (isDir ? [] : [['បើក', () => openFile(path)]]).concat([
+    const items = (isDir
+      ? [['📄 ឯកសារថ្មីក្នុងថតនេះ', () => newFilePrompt(path)],
+         ['📁 ថតរងថ្មី', () => newFolderPrompt(path)]]
+      : [['បើក', () => openFile(path)]]).concat([
       ['ប្តូរឈ្មោះ', async () => {
         const to = await ask({ title: 'ប្តូរឈ្មោះ', value: path });
         if (!to) return;

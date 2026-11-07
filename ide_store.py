@@ -166,6 +166,19 @@ def listing(pid: str) -> list:
     return out
 
 
+def dir_listing(pid: str) -> list:
+    """Every folder in the project, including ones that hold no files yet."""
+    base = files_dir(pid)
+    out = []
+    for root, dirs, _files in os.walk(base):
+        dirs.sort()
+        for name in sorted(dirs):
+            rel = os.path.relpath(os.path.join(root, name), base).replace(os.sep, "/")
+            out.append(rel)
+    out.sort()
+    return out
+
+
 def _usage(pid: str):
     total = count = 0
     for root, _dirs, files in os.walk(files_dir(pid)):
@@ -309,7 +322,8 @@ def ide_project(pid: str, request: Request):
         return err
     count, total = _usage(pid)
     return {"ok": True, "id": pid, "name": meta.get("name", ""),
-            "files": listing(pid), "count": count, "bytes": total,
+            "files": listing(pid), "dirs": dir_listing(pid),
+            "count": count, "bytes": total,
             "created": meta.get("created", 0)}
 
 
@@ -511,7 +525,7 @@ async def ide_mkdir(pid: str, request: Request):
     except OSError as exc:
         return JSONResponse({"detail": str(exc)[:120]}, status_code=500)
     _save_meta(pid, meta)
-    return {"ok": True, "path": rel}
+    return {"ok": True, "path": rel, "dirs": dir_listing(pid)}
 
 
 @router.get("/api/ide/project/{pid}/zip")

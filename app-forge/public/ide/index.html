@@ -64,6 +64,14 @@
           <input id="projName" class="proj-name" value="គម្រោងថ្មី" maxlength="60" aria-label="Project name" />
           <span class="dot" id="saveDot" title="Saved">●</span>
         </div>
+        <div class="dir-target" id="dirTarget" hidden>
+          <span class="dt-label">📁 <b id="dirTargetName">—</b></span>
+          <span class="dt-acts">
+            <button id="btnAddFileHere" class="mini" title="ឯកសារថ្មីក្នុងថតនេះ">📄+</button>
+            <button id="btnAddFolderHere" class="mini" title="ថតរងថ្មី">📁+</button>
+            <button id="dirTargetClear" class="mini" title="ឈប់ជ្រើសថត">✕</button>
+          </span>
+        </div>
         <div class="tree" id="tree" role="tree" aria-label="Project files"></div>
         <div class="side-foot">
           <span id="fileStats">0 files</span>

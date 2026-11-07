@@ -1098,6 +1098,13 @@
     const check = G.verify(result);
     logLine('buildlog', '▸ ' + result.files.length + ' files (' + result.web + ' web, ' + result.native + ' native)');
     if (!check.ok) logLine('buildlog', check.issues.join('\n'), 'err');
+    // These end in a red Gradle run every time, so stop before creating a repo.
+    if (check.blockers && check.blockers.length) {
+      logLine('buildlog', check.blockers.join('\n'), 'err');
+      toast('បញ្ឈប់ build — build script ខ្វះ dependency ដែលកូដត្រូវការ', 'err');
+      setStatus('Build បញ្ឈប់');
+      return;
+    }
 
     state.build.busy = true;
     state.build.pct = null;

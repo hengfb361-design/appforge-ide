@@ -1367,7 +1367,19 @@
         web += 1;
       }
     });
-    return { config: config, files: files, web: web, native: native, local: config.local };
+    // Gradle silently prefers the Groovy script when both flavours exist, so a
+    // project that ships build.gradle would drop the generated .kts — including
+    // its dependency list — and compile against an empty build. Keep one.
+    const generated = ['build.gradle.kts', 'settings.gradle.kts', 'app/build.gradle.kts'];
+    const groovyTwin = { 'build.gradle.kts': 'build.gradle', 'settings.gradle.kts': 'settings.gradle', 'app/build.gradle.kts': 'app/build.gradle' };
+    const drop = {};
+    generated.forEach((ktsPath) => {
+      if (Object.prototype.hasOwnProperty.call(index, groovyTwin[ktsPath])) drop[ktsPath] = 1;
+    });
+    if (Object.keys(drop).length) files = files.filter((f) => !drop[f.path]);
+    const ownManifest = (Array.isArray(projectFiles) ? projectFiles : []).some((f) =>
+      String((f && f.path) || '').replace(/^\.?\/+/, '') === 'app/src/main/AndroidManifest.xml');
+    return { config: config, files: files, web: web, native: native, local: config.local, ownManifest: ownManifest };
   }
 
   /* -------------------------------- ZIP I/O -------------------------------- */
@@ -1881,19 +1893,28 @@
     files.forEach((f) => { map[f.path] = f.text; });
 
     const required = [
-      'settings.gradle.kts', 'build.gradle.kts', 'app/build.gradle.kts',
       'app/src/main/AndroidManifest.xml', 'app/src/main/res/values/strings.xml',
       '.github/workflows/build-apk.yml', 'README.md'
     ];
     required.forEach((p) => { if (!map[p]) issues.push('ខ្វះ ' + p); });
+    if (!map['settings.gradle.kts'] && !map['settings.gradle']) issues.push('ខ្វះ settings.gradle(.kts)');
+    if (!map['build.gradle.kts'] && !map['build.gradle']) issues.push('ខ្វះ build.gradle(.kts)');
+    if (!map['app/build.gradle.kts'] && !map['app/build.gradle']) issues.push('ខ្វះ app/build.gradle(.kts)');
 
     if (!files.some((f) => /MainActivity\.(kt|java)$/.test(f.path))) issues.push('ខ្វះ MainActivity (kt/java)');
 
-    const gradle = map['app/build.gradle.kts'] || '';
-    if (cfg.pkg && !gradle.includes('applicationId = "' + cfg.pkg + '"')) issues.push('applicationId មិនត្រូវនឹង package');
-    if (cfg.pkg && !gradle.includes('namespace = "' + cfg.pkg + '"')) issues.push('namespace មិនត្រូវនឹង package');
-    if (!gradle.includes('versionCode = ')) issues.push('ខ្វះ versionCode');
-    if (!gradle.includes('compileSdk = 34')) issues.push('compileSdk មិនមែន 34');
+    // Check the script Gradle actually reads: Groovy wins over Kotlin DSL.
+    const groovyApp = map['app/build.gradle'] || '';
+    const ktsApp = map['app/build.gradle.kts'] || '';
+    const gradle = groovyApp || ktsApp;
+    if (groovyApp && ktsApp) issues.push('មាន app/build.gradle និង app/build.gradle.kts ទាំងពីរ — Gradle ប្រើតែ Groovy');
+    const quoted = String(cfg.pkg || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (cfg.pkg && !new RegExp('applicationId\\s*=?\\s*[\'"]' + quoted + '[\'"]').test(gradle)) issues.push('applicationId មិនត្រូវនឹង package');
+    if (cfg.pkg && !new RegExp('namespace\\s*=?\\s*[\'"]' + quoted + '[\'"]').test(gradle)) issues.push('namespace មិនត្រូវនឹង package');
+    if (!/versionCode\s*=?\s*\d+/.test(gradle)) issues.push('ខ្វះ versionCode');
+    const sdk = (gradle.match(/compileSdk\s*=?\s*(\d+)/) || [])[1];
+    if (!sdk) issues.push('ខ្វះ compileSdk');
+    else if (Number(sdk) < 34) issues.push('compileSdk ' + sdk + ' — ត្រូវការ 34+');
 
     files.forEach((f) => {
       if (typeof f.text === 'string' && !f.text.trim()) issues.push('ឯកសារទទេ: ' + f.path);
@@ -1935,7 +1956,10 @@
     if (!wf.includes('upload-artifact')) issues.push('workflow: ខ្វះ upload-artifact');
     if (!wf.includes('java-version')) issues.push('workflow: ខ្វះ JDK');
 
-    if (cfg.template === 'webview' && !manifest.includes('android.permission.INTERNET')) {
+    // A project that ships its own manifest decides its permissions; only the
+    // manifest this generator wrote is expected to carry INTERNET.
+    const own = !!(result && result.ownManifest);
+    if (cfg.template === 'webview' && !own && !manifest.includes('android.permission.INTERNET')) {
       issues.push('ខ្វះ INTERNET permission');
     }
     if (cfg.template === 'webview' && cfg.pull && !map['app/src/main/res/layout/activity_main.xml']) {
@@ -1946,7 +1970,21 @@
       issues.push('ខ្វះ index.html នៅ root គម្រោង (វាជាចំណុចចាប់ផ្តើមរបស់ WebView)');
     }
 
-    return { ok: issues.length === 0, issues: issues };
+    /* Failures that always end in a red Gradle run: a Material theme or
+       androidx imports whose library the build script never declares. */
+    const blockers = [];
+    const xmlAll = files.filter((f) => typeof f.text === 'string' && /\.xml$/.test(f.path)).map((f) => f.text).join('\n');
+    const codeAll = files.filter((f) => typeof f.text === 'string' && /\.(kt|java)$/.test(f.path)).map((f) => f.text).join('\n');
+    if (/parent="Theme\.Material(3|Components)\./.test(xmlAll) && gradle && !/com\.google\.android\.material:material/.test(gradle)) {
+      blockers.push('theme ប្រើ Theme.Material3 តែ build script គ្មាន com.google.android.material:material');
+    }
+    const androidx = Array.from(new Set((codeAll.match(/import\s+androidx\.[A-Za-z0-9_.]+/g) || []).map((s) => s.replace(/^import\s+/, ''))));
+    if (androidx.length && gradle && !/androidx\./.test(gradle)) {
+      blockers.push('កូដ import ' + androidx.slice(0, 3).join(', ') + (androidx.length > 3 ? ' …' : '') +
+        ' — តែ build script គ្មាន androidx dependency');
+    }
+
+    return { ok: issues.length === 0, issues: issues, blockers: blockers };
   }
 
   /* ------------------------------- snippets -------------------------------- */

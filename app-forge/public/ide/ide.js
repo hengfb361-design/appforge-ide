@@ -2092,6 +2092,7 @@
   const host = document.getElementById('editor');
   if (!ta || !bar || !host) return;
   let raf = 0;
+  const wrap = ta.parentNode;
   function place() {
     raf = 0;
     if (host.hidden) { bar.hidden = true; return; }
@@ -2101,8 +2102,12 @@
     const cs = getComputedStyle(ta);
     const lh = parseFloat(cs.lineHeight) || 20;
     const pad = parseFloat(cs.paddingTop) || 12;
+    const top = pad + line * lh - (ta.scrollTop || 0);
+    const viewH = wrap.clientHeight || 0;
+    // A caret parked outside the visible window gets no band.
+    if (top + lh < 0 || (viewH && top > viewH)) { bar.hidden = true; return; }
     bar.hidden = false;
-    bar.style.top = Math.round(pad + line * lh - (ta.scrollTop || 0)) + 'px';
+    bar.style.top = Math.round(top) + 'px';
     bar.style.height = Math.round(lh) + 'px';
     bar.style.width = Math.max(ta.clientWidth || 0, ta.scrollWidth || 0) + 'px';
   }
@@ -2110,5 +2115,6 @@
   ['input', 'keyup', 'keydown', 'click', 'select', 'scroll', 'focus', 'paste'].forEach((ev) => ta.addEventListener(ev, queue));
   document.addEventListener('selectionchange', queue);
   window.addEventListener('resize', queue);
+  if (window.MutationObserver) new MutationObserver(queue).observe(host, { attributes: true, attributeFilter: ['hidden'] });
   queue();
 })();

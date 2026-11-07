@@ -1320,8 +1320,71 @@
   // of the project's permissions, services or receivers.
   const NATIVE_PATH = /^(?:app\/(?:src\/main\/|build\.gradle|proguard-rules\.pro)|build\.gradle|settings\.gradle|gradle\.properties|\.github\/)/;
 
+  /* A native project's own sources decide its package: the panel field is only a
+     default, and a namespace that disagrees with the real classes leaves the
+     manifest pointing at an activity that does not exist. */
+  function nativePackage(projectFiles) {
+    const list = Array.isArray(projectFiles) ? projectFiles : [];
+    const sources = [];
+    let manifest = '';
+    list.forEach((f) => {
+      const path = String((f && f.path) || '').replace(/^\.?\/+/, '');
+      if (path === 'app/src/main/AndroidManifest.xml') {
+        if (typeof f.text === 'string') manifest = f.text;
+        return;
+      }
+      if (!/^app\/src\/main\/(java|kotlin)\/.+\.(kt|java)$/.test(path)) return;
+      const m = String(typeof f.text === 'string' ? f.text : '').match(/^\s*package\s+([A-Za-z_][\w.]*)/m);
+      if (m) sources.push({ pkg: m[1], path: path });
+    });
+    if (!sources.length) return '';
+    const refs = (manifest.match(/android:name="\.?([A-Za-z_][\w.]*)"/g) || [])
+      .map((s) => s.replace(/^android:name="\.?/, '').replace(/"$/, ''));
+    const score = {};
+    sources.forEach((s) => {
+      const base = s.path.split('/').pop().replace(/\.(kt|java)$/, '');
+      const fq = s.path.replace(/^app\/src\/main\/(java|kotlin)\//, '').replace(/\.(kt|java)$/, '').split('/').join('.');
+      score[s.pkg] = score[s.pkg] || { files: 0, refs: 0 };
+      score[s.pkg].files += 1;
+      if (refs.some((r) => r === fq || r === s.pkg + '.' + base || r === base)) score[s.pkg].refs += 1;
+    });
+    const names = Object.keys(score).sort((a, b) =>
+      (score[b].refs - score[a].refs) || (score[b].files - score[a].files) || (a < b ? -1 : 1));
+    if (names.length > 1 && score[names[0]].refs === score[names[1]].refs &&
+      score[names[0]].files === score[names[1]].files) return '';
+    return names[0];
+  }
+
+  /* Coordinates for the libraries that source imports and themes actually need,
+     so a project script with no dependency block is not built empty. */
+  const LIB_BY_GROUP = {
+    appcompat: 'androidx.appcompat:appcompat:1.7.0',
+    core: 'androidx.core:core-ktx:1.13.1',
+    activity: 'androidx.activity:activity-ktx:1.9.3',
+    fragment: 'androidx.fragment:fragment-ktx:1.8.2',
+    recyclerview: 'androidx.recyclerview:recyclerview:1.3.2',
+    constraintlayout: 'androidx.constraintlayout:constraintlayout:2.1.4',
+    viewpager2: 'androidx.viewpager2:viewpager2:1.1.0',
+    swiperefreshlayout: 'androidx.swiperefreshlayout:swiperefreshlayout:1.1.0',
+    webkit: 'androidx.webkit:webkit:1.11.0',
+    lifecycle: 'androidx.lifecycle:lifecycle-runtime-ktx:2.8.4'
+  };
+
+  function requiredLibs(files) {
+    const text = files.filter((f) => typeof f.text === 'string' && /\.(kt|java|xml)$/.test(f.path))
+      .map((f) => f.text).join('\n');
+    const libs = [];
+    Object.keys(LIB_BY_GROUP).forEach((group) => {
+      if (new RegExp('import\\s+androidx\\.' + group + '\\.').test(text)) libs.push(LIB_BY_GROUP[group]);
+    });
+    if (/parent="Theme\.Material(3|Components)\./.test(text)) libs.push('com.google.android.material:material:1.12.0');
+    return libs;
+  }
+
   function buildProject(cfg, projectFiles) {
     const c = cfg || {};
+    const detected = nativePackage(projectFiles);
+    if (detected) c.pkg = detected;
     const online = !!c.online && /^https?:\/\/[^\s]+$/i.test(String(c.url || '').trim());
     const config = normalize(Object.assign({}, c, {
       template: 'webview', local: !online,
@@ -1379,7 +1442,26 @@
     if (Object.keys(drop).length) files = files.filter((f) => !drop[f.path]);
     const ownManifest = (Array.isArray(projectFiles) ? projectFiles : []).some((f) =>
       String((f && f.path) || '').replace(/^\.?\/+/, '') === 'app/src/main/AndroidManifest.xml');
-    return { config: config, files: files, web: web, native: native, local: config.local, ownManifest: ownManifest };
+    // A project script with no dependency block of its own would compile against
+    // nothing, so supply the libraries its imports and theme require.
+    const appScript = files.filter((f) => f.path === 'app/build.gradle' || f.path === 'app/build.gradle.kts')[0];
+    let injected = 0;
+    if (appScript && typeof appScript.text === 'string' && !/^\s*dependencies\s*[{(]/m.test(appScript.text)) {
+      const libs = requiredLibs(files);
+      if (libs.length) {
+        appScript.text = appScript.text.replace(/\s*$/, '\n') + '\ndependencies {\n' +
+          libs.map((l) => '    implementation("' + l + '")').join('\n') + '\n}\n';
+        injected = libs.length;
+      }
+    }
+    if (injected) {
+      const props = files.filter((f) => f.path === 'gradle.properties')[0];
+      if (props && typeof props.text === 'string' && !/android\.useAndroidX\s*=\s*true/.test(props.text)) {
+        props.text = props.text.replace(/\s*$/, '\n') + 'android.useAndroidX=true\n';
+      }
+    }
+    return { config: config, files: files, web: web, native: native, local: config.local,
+      ownManifest: ownManifest, injected: injected };
   }
 
   /* -------------------------------- ZIP I/O -------------------------------- */
@@ -1915,6 +1997,9 @@
     const sdk = (gradle.match(/compileSdk\s*=?\s*(\d+)/) || [])[1];
     if (!sdk) issues.push('ខ្វះ compileSdk');
     else if (Number(sdk) < 34) issues.push('compileSdk ' + sdk + ' — ត្រូវការ 34+');
+    if (files.some((f) => /\.kt$/.test(f.path)) && gradle && !/org\.jetbrains\.kotlin\.android/.test(gradle)) {
+      issues.push('ខ្វះ plugin org.jetbrains.kotlin.android តែមានឯកសារ .kt');
+    }
 
     files.forEach((f) => {
       if (typeof f.text === 'string' && !f.text.trim()) issues.push('ឯកសារទទេ: ' + f.path);

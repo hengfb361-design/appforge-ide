@@ -529,7 +529,10 @@
   function renderProblems() {
     const items = state.previewErrors.concat(state.syntaxErrors);
     const hasIndex = state.list.some((f) => f.path === 'index.html');
-    if (state.list.length && !hasIndex) {
+    // Only a web project needs index.html; a native one never does, and saying
+    // so would send the user chasing a file their APK does not use.
+    const nativeProj = state.list.some((f) => /^(app\/src\/main|build\.gradle|settings\.gradle)/.test(f.path));
+    if (state.list.length && !hasIndex && !nativeProj) {
       items.unshift({ message: 'ខ្វះ index.html នៅ root — preview និង APK ត្រូវការវា', file: 'index.html', line: 0 });
     }
     $('#problemCount').textContent = String(items.length);

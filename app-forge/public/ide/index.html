@@ -223,9 +223,9 @@
       <div class="tabs-row">
         <div class="tabs" id="tabs"></div>
         <div class="tab-tools">
-          <button id="btnFormat" class="btn sm" title="Auto-indent / format">⇥ តម្រឹម</button>
-          <button id="btnGotoDef" class="btn sm" title="Go to definition">⌖ Definition</button>
-          <button id="btnGotoLine" class="btn sm" title="Go to line (Ctrl+G)"># Line</button>
+          <button id="btnFormat" class="btn sm" title="Auto-indent / format">⇥<span class="btn-lbl"> តម្រឹម</span></button>
+          <button id="btnGotoDef" class="btn sm" title="Go to definition">⌖<span class="btn-lbl"> Definition</span></button>
+          <button id="btnGotoLine" class="btn sm" title="Go to line (Ctrl+G)">#<span class="btn-lbl"> Line</span></button>
         </div>
       </div>
 
@@ -255,6 +255,7 @@
           <div class="foldgutter" id="foldGutter" aria-hidden="true"></div>
           <div class="gutter" id="gutter" aria-hidden="true"></div>
           <div class="code-wrap" id="codeWrap">
+            <div class="curline" id="curLine" aria-hidden="true" hidden></div>
             <pre class="highlight" id="highlight" aria-hidden="true"><code id="hlCode"></code></pre>
             <textarea id="code" class="code" spellcheck="false" autocomplete="off"
               autocapitalize="off" autocorrect="off" wrap="off" aria-label="Code editor"></textarea>

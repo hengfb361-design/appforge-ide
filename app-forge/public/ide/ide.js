@@ -337,11 +337,49 @@
 
   /* ─────────────────────────────── editor ──────────────────────────────── */
 
+  /* A colour-coded badge per file type, like the tab strip in a native IDE. */
+  const FILE_BADGES = [
+    [/^build\.gradle(\.kts)?$|\.gradle(\.kts)?$/i, ['G', 'gradle']],
+    [/\.jsx$/i, ['JSX', 'jsx']],
+    [/\.tsx$/i, ['TSX', 'tsx']],
+    [/\.(mjs|cjs|js)$/i, ['JS', 'js']],
+    [/\.ts$/i, ['TS', 'ts']],
+    [/\.(html?|xhtml)$/i, ['<>', 'html']],
+    [/\.css$/i, ['CSS', 'css']],
+    [/\.json$/i, ['{}', 'json']],
+    [/\.java$/i, ['J', 'java']],
+    [/\.(kt|kts)$/i, ['KT', 'kt']],
+    [/\.xml$/i, ['<>', 'xml']],
+    [/\.(md|markdown)$/i, ['MD', 'md']],
+    [/\.py$/i, ['PY', 'py']],
+    [/\.(sh|bash)$/i, ['>_', 'sh']],
+    [/\.ya?ml$/i, ['YML', 'yml']],
+    [/\.sql$/i, ['SQL', 'sql']],
+    [/\.(cpp|cc|cxx|hpp)$/i, ['C++', 'cpp']],
+    [/\.(c|h)$/i, ['C', 'c']],
+    [/\.rs$/i, ['RS', 'rs']],
+    [/\.go$/i, ['GO', 'go']],
+    [/\.swift$/i, ['SW', 'swift']],
+    [/\.php$/i, ['PHP', 'php']],
+    [/\.dart$/i, ['DT', 'dart']],
+    [/\.(png|jpe?g|webp|gif|svg|ico)$/i, ['IMG', 'img']]
+  ];
+
+  function fileBadge(path) {
+    const name = baseName(path);
+    for (let i = 0; i < FILE_BADGES.length; i++) {
+      if (FILE_BADGES[i][0].test(name)) return FILE_BADGES[i][1];
+    }
+    return ['·', 'txt'];
+  }
+
   function renderTabs() {
     const tabs = $('#tabs');
     tabs.innerHTML = state.open.map((p) => {
       const dirty = state.dirty[p] ? ' dirty' : '';
+      const b = fileBadge(p);
       return '<div class="tab-item' + (p === state.active ? ' on' : '') + dirty + '" data-tab="' + esc(p) + '" title="' + esc(p) + '">' +
+        '<span class="ti ' + b[1] + '">' + esc(b[0]) + '</span>' +
         '<span class="tn">' + esc(baseName(p)) + '</span>' +
         '<button class="tx" data-close="' + esc(p) + '" title="Close">✕</button></div>';
     }).join('');
@@ -2043,4 +2081,34 @@
   }
 
   document.addEventListener('DOMContentLoaded', boot);
+})();
+
+/* ── current-line band ──────────────────────────────────────────────────────
+   The textarea paints its own text transparently, so the band behind the
+   caret line is a positioned div kept in step with the caret and scroll. */
+(function currentLineBand() {
+  const ta = document.getElementById('code');
+  const bar = document.getElementById('curLine');
+  const host = document.getElementById('editor');
+  if (!ta || !bar || !host) return;
+  let raf = 0;
+  function place() {
+    raf = 0;
+    if (host.hidden) { bar.hidden = true; return; }
+    const upto = ta.value.slice(0, ta.selectionStart || 0);
+    let line = 0;
+    for (let i = 0; i < upto.length; i++) if (upto.charCodeAt(i) === 10) line += 1;
+    const cs = getComputedStyle(ta);
+    const lh = parseFloat(cs.lineHeight) || 20;
+    const pad = parseFloat(cs.paddingTop) || 12;
+    bar.hidden = false;
+    bar.style.top = Math.round(pad + line * lh - (ta.scrollTop || 0)) + 'px';
+    bar.style.height = Math.round(lh) + 'px';
+    bar.style.width = Math.max(ta.clientWidth || 0, ta.scrollWidth || 0) + 'px';
+  }
+  function queue() { if (!raf) raf = requestAnimationFrame(place); }
+  ['input', 'keyup', 'keydown', 'click', 'select', 'scroll', 'focus', 'paste'].forEach((ev) => ta.addEventListener(ev, queue));
+  document.addEventListener('selectionchange', queue);
+  window.addEventListener('resize', queue);
+  queue();
 })();

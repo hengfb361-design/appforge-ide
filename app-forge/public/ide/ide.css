@@ -471,3 +471,98 @@ kbd { background: var(--panel); border: 1px solid var(--border-2); border-bottom
 .foldgutter { display: none; }
 .editor.has-folds .foldgutter { display: block; }
 .out .engine { color: var(--text-dim); font-size: 10.5px; letter-spacing: .2px; margin-bottom: 6px; }
+
+/* ────────────────────── clean code surface (dark) ────────────────────────
+   The writing area gets its own quieter palette: a flat editor slab, numbered
+   gutter, file-type badges in the tab strip and a highlighted current line. */
+
+html[data-theme="dark"] {
+  --editor: #21222C;
+  --editor-tabbar: #16171E;
+  --editor-gutter: #1B1C25;
+  --gutter-text: #5A5E76;
+  --line-hl: rgba(139, 233, 253, .055);
+  --tok-key: #8BE9FD;
+  --tok-str: #F1FA8C;
+  --tok-num: #BD93F9;
+  --tok-com: #6272A4;
+  --tok-tag: #FF79C6;
+  --tok-attr: #50FA7B;
+  --tok-fn: #8BE9FD;
+  --tok-var: #FFB86C;
+}
+html[data-theme="light"] {
+  --editor-tabbar: #EDF0F4;
+  --editor-gutter: #F6F8FA;
+  --gutter-text: #97A0AB;
+  --line-hl: rgba(9, 105, 218, .055);
+}
+
+/* tab strip: flat, with a coloured badge per file type */
+.tabs-row { background: var(--editor-tabbar); }
+html[data-theme="dark"] .tabs-row { border-bottom: 1px solid var(--border); }
+.tabs { padding: 0 4px; gap: 0; }
+.tab-item {
+  background: transparent; border-right: 0; border-radius: 7px 7px 0 0;
+  margin: 4px 2px 0; padding: 6px 9px; gap: 7px; font-size: 12px; color: var(--text-dim);
+}
+.tab-item:hover { background: var(--panel); color: var(--text); }
+.tab-item.on { background: var(--editor); color: var(--text); box-shadow: inset 0 -2px 0 var(--accent); }
+.tab-item .ti {
+  font: 700 8.5px/1.5 var(--mono); letter-spacing: .3px; padding: 0 4px; border-radius: 4px;
+  background: #3A3D4D; color: #E6E6F0; flex: 0 0 auto; min-width: 16px; text-align: center;
+}
+.tab-item .ti.js { background: #F7DF1E; color: #1B1C25; }
+.tab-item .ti.jsx { background: #61DAFB; color: #0B2A33; }
+.tab-item .ti.ts { background: #3178C6; color: #fff; }
+.tab-item .ti.html { background: #E44D26; color: #fff; }
+.tab-item .ti.css { background: #2D6FE0; color: #fff; }
+.tab-item .ti.json { background: #6B7280; color: #fff; }
+.tab-item .ti.java { background: #E76F00; color: #fff; }
+.tab-item .ti.kt { background: #A97BFF; color: #14121E; }
+.tab-item .ti.xml { background: #4FA3F7; color: #08243C; }
+.tab-item .ti.md { background: #9AA4B2; color: #14161B; }
+.tab-item .ti.py { background: #3776AB; color: #FFD43B; }
+.tab-item .ti.gradle { background: #0BA5A5; color: #04211F; }
+.tab-item .ti.sh { background: #4EAA25; color: #04210A; }
+.tab-item .ti.yml { background: #CB171E; color: #fff; }
+.tab-item .ti.sql { background: #00758F; color: #fff; }
+.tab-item .ti.c { background: #659AD2; color: #0E2740; }
+.tab-item .ti.cpp { background: #00599C; color: #fff; }
+.tab-item .ti.rs { background: #DEA584; color: #2A1608; }
+.tab-item .ti.go { background: #00ADD8; color: #04222B; }
+.tab-item .ti.swift { background: #F05138; color: #fff; }
+.tab-item .ti.php { background: #777BB4; color: #fff; }
+.tab-item .ti.dart { background: #0175C2; color: #fff; }
+.tab-item .ti.img { background: #8B5CF6; color: #fff; }
+.tab-item .tx { margin-left: 2px; opacity: .55; }
+.tab-item.on .tx { opacity: 1; }
+
+/* editor body: roomier lines, quiet gutter, current-line band */
+.code-wrap { background: var(--editor); }
+.gutter {
+  min-width: 44px; padding: 12px 8px 80px 10px; color: var(--gutter-text);
+  background: var(--editor-gutter); border-right: 1px solid var(--border);
+}
+.highlight, .code { font-size: 13.5px; line-height: 1.7; padding: 12px 18px 80px 6px; }
+.curline {
+  position: absolute; left: 0; right: 0; pointer-events: none; z-index: 0;
+  background: var(--line-hl); box-shadow: inset 2px 0 0 rgba(139, 233, 253, .45);
+}
+html[data-theme="light"] .curline { box-shadow: inset 2px 0 0 rgba(9, 105, 218, .45); }
+.highlight { z-index: 1; }
+.code { z-index: 2; }
+
+/* status bar: dark strip instead of the loud accent band */
+html[data-theme="dark"] .status {
+  background: var(--editor-tabbar); color: var(--text-dim); border-top: 1px solid var(--border);
+}
+html[data-theme="dark"] .status #stBuild { color: var(--accent); }
+.tab-tools .btn-lbl { margin-left: 4px; }
+@media (max-width: 900px) {
+  .tab-tools { padding: 3px 4px; gap: 2px; }
+  .tab-tools .btn { padding: 4px 6px; }
+  .tab-tools .btn-lbl { display: none; }
+  .gutter { min-width: 34px; padding: 12px 6px 60px 6px; }
+  .highlight, .code { font-size: 13px; padding: 12px 12px 60px 4px; }
+}

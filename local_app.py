@@ -217,6 +217,45 @@ _APPFORGE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                              "app-forge", "public")
 if os.path.isdir(_APPFORGE_DIR):
     from fastapi.staticfiles import StaticFiles
+    from fastapi.responses import HTMLResponse
+    from fastapi import HTTPException
+
+    _IDE_DIR = os.path.join(_APPFORGE_DIR, "ide")
+    _IDE_INDEX = os.path.join(_IDE_DIR, "index.html")
+
+    def _ide_asset_stamp() -> str:
+        """Newest mtime of the IDE assets, so every deploy changes the URLs.
+
+        Without it a phone keeps the old ide.js from its cache and the page
+        looks unchanged long after a deploy (the static mount sends no
+        Cache-Control).
+        """
+        stamp = 0
+        for rel in ("ide.js", "ide.css", "editor.js", os.path.join("..", "gen.js")):
+            try:
+                stamp = max(stamp, int(os.path.getmtime(os.path.join(_IDE_DIR, rel))))
+            except OSError:
+                pass
+        return str(stamp)
+
+    # Registered before the static mount so it wins for the IDE page: the HTML
+    # is never cached and points at versioned assets.
+    @app.get("/appforge/ide/", include_in_schema=False)
+    @app.get("/appforge/ide/index.html", include_in_schema=False)
+    def ide_index_page():
+        try:
+            with open(_IDE_INDEX, encoding="utf-8") as fh:
+                page = fh.read()
+        except OSError:
+            raise HTTPException(status_code=404, detail="IDE page missing")
+        v = _ide_asset_stamp()
+        for asset in ("./ide.css", "../gen.js", "./editor.js", "./ide.js"):
+            page = page.replace('"' + asset + '"', '"' + asset + "?v=" + v + '"')
+        return HTMLResponse(page, headers={
+            "Cache-Control": "no-store, max-age=0",
+            "Pragma": "no-cache",
+        })
+
     app.mount("/appforge", StaticFiles(directory=_APPFORGE_DIR, html=True),
               name="appforge")
 

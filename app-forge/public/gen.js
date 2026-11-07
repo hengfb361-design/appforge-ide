@@ -1315,7 +1315,10 @@
      part of a Gradle project (app/src/main/..., build.gradle, .github/...)
      replaces the generated one, so a Java or Kotlin file is compiled by
      Gradle — nothing is renamed into place. */
-  const NATIVE_PATH = /^(?:app\/(?:src\/main\/(?:java|kotlin|res|assets)|build\.gradle|proguard-rules\.pro)|build\.gradle|settings\.gradle|gradle\.properties|\.github\/)/;
+  // Everything under app/src/main is a real Gradle input — including
+  // AndroidManifest.xml. Missing that one shipped a WebView manifest with none
+  // of the project's permissions, services or receivers.
+  const NATIVE_PATH = /^(?:app\/(?:src\/main\/|build\.gradle|proguard-rules\.pro)|build\.gradle|settings\.gradle|gradle\.properties|\.github\/)/;
 
   function buildProject(cfg, projectFiles) {
     const c = cfg || {};

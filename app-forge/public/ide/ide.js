@@ -1314,6 +1314,11 @@
           return;
         }
 
+        // Kotlin prints a warning as "w: file:///…/Foo.kt:23:30 …" and Gradle
+        // still succeeds; a deprecated API (TYPE_PHONE) is not the reason a build
+        // stopped, so it must not be listed as a problem on a green run.
+        if (/^w: /.test(line) || /^warning: /.test(line)) return;
+
         // Kotlin "e: file:///…/Foo.kt:12:5 msg" / Java "Foo.java:12: error: msg".
         const src = line.match(/(?:^|\s)(?:e: )?(?:file:\/\/\/)?(\S+\.(?:kt|java)):(\d+):(?:(\d+)(?::|\s))?\s*(?:error:\s*)?(.*)$/);
         if (src && !/^warning:/.test((src[4] || '').trim())) {

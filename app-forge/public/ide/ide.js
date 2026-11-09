@@ -1347,17 +1347,18 @@
         if (/^\s*\* Try:/.test(line)) inReason = false;
       });
     // One entry per distinct failure, newest last, so a rebuild does not pile up.
-    // Two files can share a name (MainActivity.kt in two packages), so a match
-    // has to narrow from the full path down: exact, then suffix, and only then
-    // the bare file name — and only when exactly one file has it.
+    // The panel must name the file the compiler named. An error path carries
+    // its own directory, so narrowing by the bare file name is only safe when
+    // the compiler gave a name and nothing else: MainActivity.kt exists in two
+    // packages, and guessing picked the wrong one.
     const fileMatch = (p) => {
       const list = state.list;
       const exact = list.filter((f) => f.path === p);
       if (exact.length) return exact[0];
       const suffix = list.filter((f) => f.path.endsWith('/' + p));
       if (suffix.length) return suffix[0];
-      const base = p.split('/').pop();
-      const named = list.filter((f) => f.path.endsWith('/' + base));
+      if (p.indexOf('/') !== -1) return null;
+      const named = list.filter((f) => f.path.split('/').pop() === p);
       return named.length === 1 ? named[0] : null;
     };
     const seen = {};

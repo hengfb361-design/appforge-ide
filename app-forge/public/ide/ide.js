@@ -1106,7 +1106,14 @@
     // These end in a red Gradle run every time, so stop before creating a repo.
     if (check.blockers && check.blockers.length) {
       logLine('buildlog', check.blockers.join('\n'), 'err');
-      toast('បញ្ឈប់ build — មានបញ្ហាដែលធ្វើឱ្យ Gradle បរាជ័យ (មើល Build log)', 'err');
+      // A stop that leaves only a toast makes the user hunt the log for the file
+      // that has to change, so the same lines go to the Problems panel.
+      state.buildErrors = check.blockers.map((b) => {
+        const hit = b.match(/[\w./-]+\.(?:kt|java|xml|kts|gradle)/);
+        return { file: hit ? hit[0] : 'build', line: 0, message: b };
+      });
+      renderProblems();
+      toast('បញ្ឈប់ build — មានបញ្ហាដែលធ្វើឱ្យ Gradle បរាជ័យ (មើល Problems)', 'err');
       setStatus('Build បញ្ឈប់');
       return;
     }

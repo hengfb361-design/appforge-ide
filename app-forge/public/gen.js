@@ -2420,6 +2420,26 @@
     }
     const xmlAll = files.filter((f) => typeof f.text === 'string' && /\.xml$/.test(f.path)).map((f) => f.text).join('\n');
     const codeAll = files.filter((f) => typeof f.text === 'string' && /\.(kt|java)$/.test(f.path)).map((f) => f.text).join('\n');
+    // Two files declaring the same package + class make kotlinc/javac stop with
+    // "Redeclaration" and name only the two classes, never what to change.
+    const decls = {};
+    files.forEach((f) => {
+      if (typeof f.text !== 'string' || !/\.(kt|java)$/.test(f.path)) return;
+      const pkg = ((f.text.match(/^\s*package\s+([\w.]+)/m) || [])[1]) || '';
+      const re = /^(?:@[\w.]+(?:\([^)]*\))?\s*)*(?:(?:public|private|protected|internal|abstract|final|open|data|sealed|inner|enum|static|annotation)\s+)*(?:class|object|interface|record)\s+([A-Za-z_]\w*)/gm;
+      let m;
+      while ((m = re.exec(f.text))) {
+        const fq = (pkg ? pkg + '.' : '') + m[1];
+        (decls[fq] = decls[fq] || []).push(f.path);
+      }
+    });
+    Object.keys(decls).forEach((fq) => {
+      const from = Array.from(new Set(decls[fq]));
+      if (from.length > 1) {
+        blockers.push('class ' + fq + ' មាននៅ ' + from.length + ' ឯកសារ: ' + from.join(', ') +
+          ' — kotlinc បរាជ័យដោយ "Redeclaration" ដូច្នេះ build ឈប់នៅទីនេះ; លុបមួយ ឬប្តូរឈ្មោះ class និង package');
+      }
+    });
     if (/parent="Theme\.Material(3|Components)\./.test(xmlAll) && gradle && !/com\.google\.android\.material:material/.test(gradle)) {
       blockers.push('theme ប្រើ Theme.Material3 តែ build script គ្មាន com.google.android.material:material');
     }

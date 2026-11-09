@@ -1106,7 +1106,7 @@
     // These end in a red Gradle run every time, so stop before creating a repo.
     if (check.blockers && check.blockers.length) {
       logLine('buildlog', check.blockers.join('\n'), 'err');
-      toast('បញ្ឈប់ build — build script ខ្វះ dependency ដែលកូដត្រូវការ', 'err');
+      toast('បញ្ឈប់ build — មានបញ្ហាដែលធ្វើឱ្យ Gradle បរាជ័យ (មើល Build log)', 'err');
       setStatus('Build បញ្ឈប់');
       return;
     }

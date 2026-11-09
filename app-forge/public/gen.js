@@ -1556,6 +1556,17 @@
         old.indexOf('WebViewAssetLoader') < 0;
       if (generatedWebView) files[actAt] = { path: activityPath, text: mainActivityWebView(config) };
     }
+    /* The manifest launches `.MainActivity`, so the class the project wrote is the
+       app even when it sits in another package folder. Keeping the generator's
+       WebView twin next to it declares the same class twice and kotlinc stops. */
+    const ownActivity = files.some((f) => /\/MainActivity\.(kt|java)$/.test(f.path) &&
+      f.path !== activityPath && typeof f.text === 'string' &&
+      /class MainActivity/.test(f.text) && f.text.indexOf('appassets.androidplatform.net') < 0);
+    if (ownActivity) {
+      const stub = files.findIndex((f) => f.path === activityPath && typeof f.text === 'string' &&
+        f.text.indexOf('appassets.androidplatform.net') >= 0);
+      if (stub >= 0) files.splice(stub, 1);
+    }
     const ownManifest = (Array.isArray(projectFiles) ? projectFiles : []).some((f) =>
       String((f && f.path) || '').replace(/^\.?\/+/, '') === 'app/src/main/AndroidManifest.xml');
     // A project script with no dependency block of its own would compile against
@@ -2256,6 +2267,12 @@
     const fixes = [];
     const out = list.map((f) => Object.assign({}, f));
 
+    const original = {};
+    out.forEach((f) => {
+      if (typeof f.text !== 'string' || !/\.(kt|java)$/.test(f.path)) return;
+      original[f.path] = ((f.text.match(/^\s*package\s+([A-Za-z0-9_.]+)/m) || [])[1]) || '';
+    });
+
     out.forEach((f) => {
       if (typeof f.text !== 'string' || !/\.kt$/.test(f.path)) return;
       let text = f.text.replace(/^\uFEFF/, '');
@@ -2278,6 +2295,59 @@
         fixes.push(f.path + ': បន្ថែម import kotlin.math.' + math.added.join(', kotlin.math.'));
       }
       f.text = text;
+    });
+
+    // Every .kt file was just moved onto the panel's package, so a manifest that
+    // still spells an older package is the single thing AAPT2 refuses before any
+    // code is compiled. It is the same assignment as above, only in XML.
+    out.forEach((f) => {
+      if (f.path !== 'app/src/main/AndroidManifest.xml' || typeof f.text !== 'string' || !pkg) return;
+      const attr = f.text.match(/\spackage\s*=\s*"([A-Za-z0-9_.]+)"/);
+      if (!attr || attr[1] === pkg) return;
+      const old = attr[1];
+      f.text = f.text.replace(attr[0], ' package="' + pkg + '"')
+        .split('android:name="' + old + '.').join('android:name="' + pkg + '.');
+      fixes.push('AndroidManifest.xml: package ' + old + ' → ' + pkg);
+    });
+
+    /* Two files that end up declaring one class stop kotlinc with "Redeclaration"
+       and name only the classes. A copy left in another package's folder is the
+       usual cause, so move that one out of the compiled source set instead of
+       deleting it: the build runs and nothing the user wrote is lost. */
+    const declOf = (text) => {
+      const pkg = ((text.match(/^\s*package\s+([A-Za-z0-9_.]+)/m) || [])[1]) || '';
+      const names = [];
+      const re = /^(?:@[\w.]+(?:\([^)]*\))?\s*)*(?:(?:public|private|protected|internal|abstract|final|open|data|sealed|inner|enum|static|annotation)\s+)*(?:class|object|interface|record)\s+([A-Za-z_]\w*)/gm;
+      let m;
+      while ((m = re.exec(text))) names.push((pkg ? pkg + '.' : '') + m[1]);
+      return { pkg: pkg, names: names };
+    };
+    const byClass = {};
+    out.forEach((f) => {
+      if (typeof f.text !== 'string' || !/\.(kt|java)$/.test(f.path)) return;
+      declOf(f.text).names.forEach((n) => { (byClass[n] = byClass[n] || []).push(f); });
+    });
+    const folderOf = (path) => String(path).replace(/^(app\/src\/main\/(?:java|kotlin)\/)/, '')
+      .replace(/\.[A-Za-z]+$/, '').split('/').slice(0, -1).join('.');
+    // The WebView activity this generator writes is not user code: a project that
+    // brings its own MainActivity keeps it and the generated twin is dropped.
+    const isGeneratedActivity = (f) => /appassets\.androidplatform\.net/.test(f.text) &&
+      /START_URL/.test(f.text) && /class MainActivity/.test(f.text);
+    Object.keys(byClass).forEach((fq) => {
+      const group = Array.from(new Set(byClass[fq]));
+      if (group.length < 2) return;
+      // A generated twin is handled in buildProject (it owns that file), so only a
+      // duplicate between files the user wrote needs moving here.
+      if (group.some(isGeneratedActivity)) return;
+      const keeper = group.filter((f) => folderOf(f.path) === original[f.path])[0] || group[0];
+      group.forEach((f) => {
+        if (f === keeper) return;
+        const at = out.indexOf(f);
+        if (at < 0) return;
+        const moved = 'unused/' + f.path.replace(/^app\/src\/main\/(?:java|kotlin)\//, '');
+        out[at] = { path: moved, text: f.text };
+        fixes.push(f.path + ' → ' + moved + ': class ' + fq + ' ស្ទួន (មិនលុប — ផ្លាស់ចេញពី app/src ដើម្បីកុំឱ្យ kotlinc បរាជ័យ)');
+      });
     });
 
     fixIconRefs(cfg, out).forEach((line) => fixes.push(line));
@@ -2425,6 +2495,9 @@
     const decls = {};
     files.forEach((f) => {
       if (typeof f.text !== 'string' || !/\.(kt|java)$/.test(f.path)) return;
+      // Only what Gradle compiles can collide; moved-aside copies under
+      // app/src/main/assets are shipped as assets, not compiled.
+      if (!/^app\/src\/main\/(java|kotlin)\//.test(f.path)) return;
       const pkg = ((f.text.match(/^\s*package\s+([\w.]+)/m) || [])[1]) || '';
       const re = /^(?:@[\w.]+(?:\([^)]*\))?\s*)*(?:(?:public|private|protected|internal|abstract|final|open|data|sealed|inner|enum|static|annotation)\s+)*(?:class|object|interface|record)\s+([A-Za-z_]\w*)/gm;
       let m;

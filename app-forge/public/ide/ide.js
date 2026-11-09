@@ -1347,7 +1347,19 @@
         if (/^\s*\* Try:/.test(line)) inReason = false;
       });
     // One entry per distinct failure, newest last, so a rebuild does not pile up.
-    const fileMatch = (p) => state.list.filter((f) => f.path === p || f.path.endsWith('/' + p) || f.path.endsWith('/' + p.split('/').pop()))[0];
+    // Two files can share a name (MainActivity.kt in two packages), so a match
+    // has to narrow from the full path down: exact, then suffix, and only then
+    // the bare file name — and only when exactly one file has it.
+    const fileMatch = (p) => {
+      const list = state.list;
+      const exact = list.filter((f) => f.path === p);
+      if (exact.length) return exact[0];
+      const suffix = list.filter((f) => f.path.endsWith('/' + p));
+      if (suffix.length) return suffix[0];
+      const base = p.split('/').pop();
+      const named = list.filter((f) => f.path.endsWith('/' + base));
+      return named.length === 1 ? named[0] : null;
+    };
     const seen = {};
     const unique = found.map((e) => {
       const hit = fileMatch(e.file);

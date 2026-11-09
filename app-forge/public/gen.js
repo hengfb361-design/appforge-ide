@@ -368,6 +368,14 @@
 
   function mainActivityWebView(c) {
     const refresh = c.pull;
+    // A bundled page served from file:// has no origin: ES modules, fetch() and
+    // CORS all fail there, which leaves a page stuck on its own loading screen.
+    // WebViewAssetLoader serves the same files over https with a real origin.
+    const bundled = /^file:\/\/\/android_asset\/www\//.test(c.url);
+    const startUrl = bundled
+      ? 'https://appassets.androidplatform.net/assets/www/index.html'
+      : c.url;
+    const appHost = bundled ? 'appassets.androidplatform.net' : hostOf(c.url);
     const lines = [
       'package ' + c.pkg,
       '',
@@ -376,16 +384,29 @@
       'import android.graphics.Color',
       'import android.net.Uri',
       'import android.os.Bundle',
+      'import android.util.Log',
+      'import android.webkit.ConsoleMessage',
       'import android.webkit.WebChromeClient',
+      'import android.webkit.WebResourceError',
       'import android.webkit.WebResourceRequest',
+      'import android.webkit.WebResourceResponse',
       'import android.webkit.WebView',
       'import android.webkit.WebViewClient',
       'import androidx.activity.OnBackPressedCallback',
       'import androidx.appcompat.app.AppCompatActivity',
+      bundled ? 'import androidx.webkit.WebViewAssetLoader' : null,
       refresh ? 'import androidx.swiperefreshlayout.widget.SwipeRefreshLayout' : null,
       '',
       'class MainActivity : AppCompatActivity() {',
       '    private lateinit var web: WebView',
+      bundled ? [
+        '    private val assets: WebViewAssetLoader by lazy {',
+        '        WebViewAssetLoader.Builder()',
+        '            .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(this))',
+        '            .build()',
+        '    }',
+        ''
+      ].join('\n') : null,
       refresh ? '    private lateinit var refreshLayout: SwipeRefreshLayout' : null,
       '',
       '    @SuppressLint("SetJavaScriptEnabled")',
@@ -399,8 +420,26 @@
       '        web.settings.domStorageEnabled = true',
       '        web.settings.loadWithOverviewMode = true',
       '        web.settings.useWideViewPort = true',
-      '        web.webChromeClient = WebChromeClient()',
+      '        web.webChromeClient = object : WebChromeClient() {',
+      '            override fun onConsoleMessage(msg: ConsoleMessage): Boolean {',
+      '                Log.d("AppForgeWeb", msg.message() + " (" + msg.sourceId() + ":" + msg.lineNumber() + ")")',
+      '                return true',
+      '            }',
+      '        }',
       '        web.webViewClient = object : WebViewClient() {',
+      bundled ? [
+        '            override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {',
+        '                return assets.shouldInterceptRequest(request.url)',
+        '            }'
+      ].join('\n') : null,
+      '            override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {',
+      '                if (request.isForMainFrame) showLoadError(error.errorCode.toString() + " " + error.description, request.url.toString())',
+      '            }',
+      '',
+      '            override fun onReceivedHttpError(view: WebView, request: WebResourceRequest, response: WebResourceResponse) {',
+      '                if (request.isForMainFrame) showLoadError("HTTP " + response.statusCode, request.url.toString())',
+      '            }',
+      '',
       c.external ? [
         '            override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {',
         '                val link = request.url',
@@ -423,9 +462,26 @@
         '            override fun onProgressChanged(view: WebView, progress: Int) {',
         '                refreshLayout.isRefreshing = progress < 100',
         '            }',
+        '            override fun onConsoleMessage(msg: ConsoleMessage): Boolean {',
+        '                Log.d("AppForgeWeb", msg.message() + " (" + msg.sourceId() + ":" + msg.lineNumber() + ")")',
+        '                return true',
+        '            }',
         '        }'
       ].join('\n') : null,
       '        web.loadUrl(START_URL)',
+      '    }',
+      '',
+      '    /* A failed load used to leave the page on its own loading screen forever.',
+      '       Show what went wrong instead of a blank WebView. */',
+      '    private fun showLoadError(detail: String, url: String) {',
+      '        Log.e("AppForge", "load failed: " + detail + " " + url)',
+      '        val page = "<!doctype html><meta name=viewport content=\\"width=device-width,initial-scale=1\\">" +',
+      '            "<body style=\\"background:#0B0F14;color:#E6EDF3;font-family:sans-serif;padding:24px;line-height:1.5\\">" +',
+      '            "<h3 style=\\"margin:0 0 12px\\">ផ្ទុកមិនបាន</h3>" +',
+      '            "<p style=\\"color:#FF7B72;margin:0 0 8px\\">" + detail.replace("<", "&lt;") + "</p>" +',
+      '            "<p style=\\"color:#8B949E;font-size:13px;word-break:break-all\\">" + url + "</p>" +',
+      '            "<p style=\\"color:#8B949E;font-size:13px\\">ពិនិត្យអ៊ីនធឺណិត ឬឯកសារ index.html ក្នុង assets/www</p></body>"',
+      '        web.loadDataWithBaseURL(null, page, "text/html", "utf-8", null)',
       '    }',
       '',
       '    override fun onSaveInstanceState(outState: Bundle) {',
@@ -439,8 +495,8 @@
       ].join('\n') : null,
       '',
       '    companion object {',
-      '        const val START_URL = "' + c.url.replace(/"/g, '') + '"',
-      '        const val APP_HOST = "' + hostOf(c.url) + '"',
+      '        const val START_URL = "' + startUrl.replace(/"/g, '') + '"',
+      '        const val APP_HOST = "' + appHost + '"',
       '    }',
       '}',
       ''
@@ -1117,6 +1173,7 @@
       'jobs:',
       '  build:',
       '    runs-on: ubuntu-latest',
+      '    timeout-minutes: 30',
       '    steps:',
       '      - uses: actions/checkout@v4',
       '',
@@ -1125,9 +1182,37 @@
       '          distribution: temurin',
       '          java-version: "17"',
       '',
+      // The cache step is a convenience: when Gradle's distribution host answers
+      // 504 the action fails before any code is compiled, so a transient network
+      // error looked like a broken project. It may fail without failing the job,
+      // and the next step gets Gradle 8.7 onto PATH one way or another.
       '      - uses: gradle/actions/setup-gradle@v4',
+      '        continue-on-error: true',
       '        with:',
       '          gradle-version: "8.7"',
+      '',
+      '      - name: Ensure Gradle 8.7',
+      '        run: |',
+      '          set -e',
+      '          if command -v gradle >/dev/null 2>&1 && gradle --version 2>/dev/null | grep -q "Gradle 8\\."; then',
+      '            echo "Gradle already available"',
+      '            gradle --version | head -5',
+      '            exit 0',
+      '          fi',
+      '          ok=0',
+      '          for i in 1 2 3 4; do',
+      '            if curl -fsSL --retry 4 --retry-delay 5 --retry-all-errors \\',
+      '              -o "$RUNNER_TEMP/gradle.zip" \\',
+      '              https://services.gradle.org/distributions/gradle-8.7-bin.zip; then ok=1; break; fi',
+      '            echo "Gradle download failed (attempt $i), retrying in 10s"',
+      '            sleep 10',
+      '          done',
+      '          if [ "$ok" != "1" ]; then',
+      '            echo "::error::មិនអាចទាញ Gradle 8.7 បាន (បណ្តាញ services.gradle.org) — សូម Build ម្តងទៀត"',
+      '            exit 1',
+      '          fi',
+      '          unzip -q -o "$RUNNER_TEMP/gradle.zip" -d "$RUNNER_TEMP"',
+      '          echo "$RUNNER_TEMP/gradle-8.7/bin" >> "$GITHUB_PATH"',
       ''
     ];
     if (signed) {
@@ -1161,7 +1246,18 @@
     }
     lines.push(
       '      - name: Build ' + target.toUpperCase(),
-      '        run: gradle ' + task + ' --no-daemon --stacktrace',
+      '        run: |',
+      '          set -o pipefail',
+      '          for i in 1 2 3; do',
+      '            if gradle ' + task + ' --no-daemon --stacktrace 2>&1 | tee build.log; then exit 0; fi',
+      '            if grep -qE "Could not (resolve|download|GET)|Unexpected HTTP response|Connection (reset|timed out)|Read timed out" build.log; then',
+      '              echo "::warning::បញ្ហាបណ្តាញ — ព្យាយាមម្តងទៀត ($i)"',
+      '              sleep 15',
+      '            else',
+      '              exit 1',
+      '            fi',
+      '          done',
+      '          exit 1',
       '',
       '      - name: Upload APK',
       '        uses: actions/upload-artifact@v4',
@@ -1440,6 +1536,26 @@
       if (Object.prototype.hasOwnProperty.call(index, groovyTwin[ktsPath])) drop[ktsPath] = 1;
     });
     if (Object.keys(drop).length) files = files.filter((f) => !drop[f.path]);
+    // Generated infrastructure is not user code: a project created before a fix
+    // would otherwise keep its old workflow and its old WebView activity for
+    // good, and neither repair would ever reach the APK it builds. Only files
+    // that still match the generator's own text are replaced.
+    const wfPath = '.github/workflows/build-apk.yml';
+    const wfAt = files.findIndex((f) => f.path === wfPath);
+    if (wfAt >= 0 && typeof files[wfAt].text === 'string' &&
+      /name:\s*Build Android/.test(files[wfAt].text) &&
+      /gradle\/actions\/setup-gradle/.test(files[wfAt].text)) {
+      files[wfAt] = { path: wfPath, text: workflowYaml(config) };
+    }
+    const activityPath = 'app/src/main/java/' + config.pkg.split('.').join('/') + '/MainActivity.kt';
+    const actAt = files.findIndex((f) => f.path === activityPath);
+    if (actAt >= 0 && typeof files[actAt].text === 'string') {
+      const old = files[actAt].text;
+      const generatedWebView = old.indexOf('const val START_URL = "file:///android_asset/www/index.html"') >= 0 &&
+        old.indexOf('web.settings.domStorageEnabled = true') >= 0 &&
+        old.indexOf('WebViewAssetLoader') < 0;
+      if (generatedWebView) files[actAt] = { path: activityPath, text: mainActivityWebView(config) };
+    }
     const ownManifest = (Array.isArray(projectFiles) ? projectFiles : []).some((f) =>
       String((f && f.path) || '').replace(/^\.?\/+/, '') === 'app/src/main/AndroidManifest.xml');
     // A project script with no dependency block of its own would compile against
@@ -1452,6 +1568,24 @@
         appScript.text = appScript.text.replace(/\s*$/, '\n') + '\ndependencies {\n' +
           libs.map((l) => '    implementation("' + l + '")').join('\n') + '\n}\n';
         injected = libs.length;
+      }
+    } else if (appScript && typeof appScript.text === 'string') {
+      // A script that already has a dependency block still has to gain the
+      // libraries the sources were given, or the build fails on a missing import.
+      const t = appScript.text;
+      const missing = requiredLibs(files).filter((l) => {
+        const ga = l.split(':').slice(0, 2).join(':');
+        return t.indexOf(ga) < 0;
+      });
+      if (missing.length) {
+        const at = t.search(/^\s*dependencies\s*[{(]/m);
+        const open = t.indexOf('{', at);
+        if (open > 0) {
+          appScript.text = t.slice(0, open + 1) + '\n' +
+            missing.map((l) => '    implementation("' + l + '")').join('\n') +
+            t.slice(open + 1);
+          injected = missing.length;
+        }
       }
     }
     // A project script that never pins a JVM target leaves javac at 1.8 while

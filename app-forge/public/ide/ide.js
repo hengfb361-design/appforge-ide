@@ -1255,6 +1255,20 @@
   function parseBuildErrors(text) {
     const found = [];
     String(text || '').split('\n').forEach((line) => {
+      // A failed Gradle download is the build server's problem, not the code's;
+      // say so instead of showing nothing next to "Build failed".
+      const net = line.match(/Unexpected HTTP response: (\d+)/) ||
+        line.match(/(?:Could not|Failed to) (?:resolve|download|GET|connect to)\s+'?(https?:\/\/[^\s']+)/);
+      if (net && /error|Error|##\[error\]/.test(line)) {
+        found.push({
+          file: 'build',
+          line: 0,
+          message: net[2]
+            ? 'ទាញ ' + net[2] + ' មិនបាន — បណ្តាញមានបញ្ហា សូមចុច Build ម្តងទៀត'
+            : 'ទាញ Gradle មិនបាន (HTTP ' + net[1] + ') — សូមចុច Build ម្តងទៀត'
+        });
+        return;
+      }
       const m = line.match(/e: (?:file:\/\/\/)?(?:.*?\/)?((?:app|src)\/[^:\s]+\.(?:kt|java)):(\d+):(\d+)\s*(.*)$/);
       if (!m) return;
       const file = state.list.filter((f) => f.path === m[1] || f.path.endsWith('/' + m[1]) || f.path.endsWith('/' + m[1].split('/').pop()))[0];

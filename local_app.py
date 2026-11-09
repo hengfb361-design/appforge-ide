@@ -1107,7 +1107,6 @@ def _af_token() -> str:
 
 _AF_TOKEN = _af_token()  # kept for tests; endpoints re-read so a rotation works
 _AF_API = "https://api.github.com"
-_AF_HITS = {}
 _AF_LOCK = threading.Lock()
 _AF_MAX_FILES = 500
 _AF_MAX_BYTES = 12_000_000
@@ -1301,18 +1300,6 @@ def _af_safe_name(raw) -> str:
     return name.strip("-._")[:60] or "appforge-app"
 
 
-def _af_rate_ok(ip: str) -> bool:
-    now = time.time()
-    with _AF_LOCK:
-        hits = [t for t in _AF_HITS.get(ip, []) if now - t < 600]
-        if len(hits) >= 3:
-            _AF_HITS[ip] = hits
-            return False
-        hits.append(now)
-        _AF_HITS[ip] = hits
-    return True
-
-
 def _af_files(payload) -> list:
     files = payload.get("files") if isinstance(payload, dict) else None
     if not isinstance(files, list) or not files or len(files) > _AF_MAX_FILES:
@@ -1368,12 +1355,6 @@ async def appforge_build(request: Request):
             {"detail": "Server មិនមាន GITHUB_TOKEN — បន្ថែមនៅ Render → Environment រួច deploy ម្តងទៀត។"},
             status_code=503,
         )
-    ip = (request.client.host if request.client else "?") or "?"
-    if not _af_rate_ok(ip):
-        return JSONResponse(
-            {"detail": "ច្រើនពេក — សូមរង់ចាំ ១០ នាទី ឬប្រើ ZIP ដោយដៃ។"},
-            status_code=429,
-        )
     try:
         payload = await request.json()
     except Exception:
@@ -1396,6 +1377,11 @@ async def appforge_build(request: Request):
             "description": "បង្កើតដោយ AppForge",
         })
         if created.status_code not in (201, 422):
+            if created.status_code in (403, 429) and "rate limit" in _gh_msg(created).lower():
+                return JSONResponse(
+                    {"detail": "GitHub កំណត់ចំនួនបណ្តោះអាសន្ន — រង់ចាំ ១–២ នាទី រួចចុច Build ម្តងទៀត។"},
+                    status_code=429,
+                )
             return JSONResponse(
                 {"detail": "បង្កើត repo មិនបាន (GitHub %s: %s)" % (created.status_code, _gh_msg(created))},
                 status_code=502,
@@ -1403,6 +1389,11 @@ async def appforge_build(request: Request):
         full = owner + "/" + name
         error = _af_commit(full, files)
         if error:
+            if "rate limit" in error.lower():
+                return JSONResponse(
+                    {"detail": "GitHub កំណត់ចំនួនបណ្តោះអាសន្ន — រង់ចាំ ១–២ នាទី រួចចុច Build ម្តងទៀត។"},
+                    status_code=429,
+                )
             return JSONResponse({"detail": error}, status_code=502)
         _af_dispatch(full, files)
         html_url = (created.json() or {}).get("html_url") or ("https://github.com/" + full)

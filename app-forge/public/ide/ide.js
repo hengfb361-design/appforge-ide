@@ -1298,6 +1298,15 @@
           return;
         }
 
+        // AAPT2 compares package= in the manifest with namespace in the module's
+        // build file; the message names neither file it wants changed.
+        const pkg = line.match(/Incorrect package="?([\w.]+)"? found/);
+        if (pkg) {
+          add('app/src/main/AndroidManifest.xml', 0, 'package="' + pkg[1] +
+            '" មិនត្រូវនឹង namespace ក្នុង app/build.gradle.kts — ត្រូវឱ្យពីរកន្លែងនេះដូចគ្នា');
+          return;
+        }
+
         // Kotlin "e: file:///…/Foo.kt:12:5 msg" / Java "Foo.java:12: error: msg".
         const src = line.match(/(?:^|\s)(?:e: )?(?:file:\/\/\/)?(\S+\.(?:kt|java)):(\d+):(?:(\d+)(?::|\s))?\s*(?:error:\s*)?(.*)$/);
         if (src && !/^warning:/.test((src[4] || '').trim())) {

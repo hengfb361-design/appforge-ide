@@ -2363,6 +2363,15 @@
       }
     });
 
+    // AAPT2 refuses a manifest whose package= differs from the module namespace,
+    // and its message names neither file that has to change.
+    const manPkg = (manifest.match(/package="([\w.]+)"/) || [])[1];
+    const namespace = (gradle.match(/namespace\s*=?\s*['"]([\w.]+)['"]/) || [])[1];
+    if (manPkg && namespace && manPkg !== namespace) {
+      issues.push('AndroidManifest package="' + manPkg + '" ខុសពី namespace="' + namespace +
+        '" ក្នុង app/build.gradle.kts — ត្រូវឱ្យដូចគ្នា បើមិនដូច្នេះ AAPT បរាជ័យ');
+    }
+
     if (cfg.template === 'system') {
       ['SYSTEM_ALERT_WINDOW', 'FOREGROUND_SERVICE_SPECIAL_USE', 'RECEIVE_BOOT_COMPLETED',
         'WRITE_SETTINGS'].forEach((p) => {
@@ -2405,6 +2414,10 @@
     /* Failures that always end in a red Gradle run: a Material theme or
        androidx imports whose library the build script never declares. */
     const blockers = [];
+    if (manPkg && namespace && manPkg !== namespace) {
+      blockers.push('AndroidManifest package="' + manPkg + '" ខុសពី namespace="' + namespace +
+        '" — AAPT នឹងបរាជ័យរាល់ដង ដូច្នេះ build ត្រូវឈប់នៅទីនេះ');
+    }
     const xmlAll = files.filter((f) => typeof f.text === 'string' && /\.xml$/.test(f.path)).map((f) => f.text).join('\n');
     const codeAll = files.filter((f) => typeof f.text === 'string' && /\.(kt|java)$/.test(f.path)).map((f) => f.text).join('\n');
     if (/parent="Theme\.Material(3|Components)\./.test(xmlAll) && gradle && !/com\.google\.android\.material:material/.test(gradle)) {

@@ -930,20 +930,34 @@
 
     if (lang === 'html' || lang === 'xml') {
       engine = 'tag balance scan (not a validator)';
+      /* A tag may wrap across lines and an attribute value may contain ">", so
+         the whole document is scanned rather than one line at a time. The old
+         per-line scan never saw a multi-line tag, and reported a perfectly
+         valid AndroidManifest as elements closing the wrong parent. */
       const stack = [];
-      for (let i = 0; i < lines.length; i++) {
-        const re = /<(\/?)([A-Za-z][\w:.-]*)([^>]*?)(\/?)>/g;
-        let m;
-        while ((m = re.exec(lines[i])) !== null) {
-          if (m[0].startsWith('<!--')) continue;
+      const at = (idx) => {
+        const before = src.slice(0, idx).split('\n');
+        return { line: before.length, col: before[before.length - 1].length + 1 };
+      };
+      const re = /<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>|<![^>]*>|<\?[\s\S]*?\?>|<\/([A-Za-z][\w:.-]*)\s*>|<([A-Za-z][\w:.-]*)((?:"[^"]*"|'[^']*'|[^>"'])*?)(\/?)>/g;
+      let m;
+      while ((m = re.exec(src)) !== null) {
+        if (m[1]) {
+          const name = m[1].toLowerCase();
+          const pos = at(m.index);
+          const open = stack[stack.length - 1];
+          if (!open) {
+            items.push({ line: pos.line, col: pos.col, message: '</' + name + '> has no opening tag', severity: 'error' });
+          } else if (open.name !== name) {
+            items.push({ line: pos.line, col: pos.col, message: '</' + name + '> closes <' + open.name + '> opened on line ' + open.line, severity: 'error' });
+            stack.pop();
+          } else stack.pop();
+        } else if (m[2]) {
           const name = m[2].toLowerCase();
-          if (m[1]) {
-            if (!stack.length) items.push({ line: i + 1, col: m.index + 1, message: '</' + name + '> has no opening tag', severity: 'error' });
-            else if (stack[stack.length - 1].name !== name) {
-              items.push({ line: i + 1, col: m.index + 1, message: '</' + name + '> closes <' + stack[stack.length - 1].name + '> opened on line ' + stack[stack.length - 1].line, severity: 'error' });
-              stack.pop();
-            } else stack.pop();
-          } else if (!m[4] && !VOID_TAGS[name]) stack.push({ name: name, line: i + 1 });
+          if (!m[4] && !VOID_TAGS[name]) {
+            const pos = at(m.index);
+            stack.push({ name: name, line: pos.line });
+          }
         }
       }
       stack.forEach((s) => items.push({ line: s.line, col: 1, message: '<' + s.name + '> is never closed', severity: 'error' }));

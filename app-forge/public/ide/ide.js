@@ -36,6 +36,7 @@
     build: { repo: '', url: '', timer: null, busy: false, last: null },
     previewErrors: [],
     syntaxErrors: [],
+    buildErrors: [],
     diagEngine: '',
     langs: {},
     editor: null,
@@ -527,14 +528,12 @@
   }, 650);
 
   function renderProblems() {
-    const items = state.previewErrors.concat(state.syntaxErrors);
-    const hasIndex = state.list.some((f) => f.path === 'index.html');
-    // Only a web project needs index.html; a native one never does, and saying
-    // so would send the user chasing a file their APK does not use.
-    const nativeProj = state.list.some((f) => /^(app\/src\/main|build\.gradle|settings\.gradle)/.test(f.path));
-    if (state.list.length && !hasIndex && !nativeProj) {
-      items.unshift({ message: 'ខ្វះ index.html នៅ root — preview និង APK ត្រូវការវា', file: 'index.html', line: 0 });
-    }
+    // Editor diagnostics, preview errors and the compiler's own messages share
+    // one list: a missing start page is repaired by the build, so it is not a
+    // problem to report here.
+    const items = state.previewErrors
+      .concat(state.syntaxErrors)
+      .concat(state.buildErrors || []);
     $('#problemCount').textContent = String(items.length);
     $('#problemCount').className = 'pill' + (items.length ? ' bad' : ' ok');
     const engine = state.diagEngine
@@ -1089,14 +1088,17 @@
   async function startBuild() {
     if (state.build.busy) return;
     const cfg = buildConfig();
-    const files = await collectProjectFiles();
-    // A native project needs no index.html; a web one needs it to have anything
-    // to show, so only the web case is refused here.
-    const native = files.some((f) => /^(app\/src\/main|build\.gradle|settings\.gradle)/.test(f.path));
-    if (!native && !files.some((f) => f.path === 'index.html')) {
-      toast('ត្រូវមាន index.html នៅ root ឬឯកសារ Android មុនពេល build', 'err');
+    let files = await collectProjectFiles();
+    if (!files.length) {
+      toast('គ្មានឯកសារក្នុងគម្រោង — បង្កើត App ឬ Import សិន', 'err');
       return;
     }
+    // Any project type builds: the repairs below have exactly one correct form,
+    // and the copy that is sent to the builder carries them.
+    const fixed = typeof G.autoFix === 'function' ? G.autoFix(cfg, files) : { files: files, fixes: [] };
+    files = fixed.files;
+    if (fixed.fixes.length) logLine('buildlog', '🔧 auto-fix:\n' + fixed.fixes.join('\n'), 'ok');
+    state.buildErrors = [];
     const result = G.buildProject(cfg, files);
     const check = G.verify(result);
     logLine('buildlog', '▸ ' + result.files.length + ' files (' + result.web + ' web, ' + result.native + ' native)');
@@ -1238,12 +1240,39 @@
       if (!r.ok) throw new Error(d.detail || ('HTTP ' + r.status));
       $('#buildlog').textContent = d.logs || '(គ្មាន log)';
       showBottom('buildlog');
+      parseBuildErrors(d.logs);
       if (d.run_url) {
         $('#repoLink').href = d.run_url;
       }
     } catch (err) {
       toast('អាន log មិនបាន: ' + err.message, 'err');
     }
+  }
+
+  /* The compiler reports "e: file:///…/app/src/main/java/…/Foo.kt:12:3 message".
+     Those lines become clickable problems so the file opens at the failing
+     line instead of leaving the user to scroll the whole log. */
+  function parseBuildErrors(text) {
+    const found = [];
+    String(text || '').split('\n').forEach((line) => {
+      const m = line.match(/e: (?:file:\/\/\/)?(?:.*?\/)?((?:app|src)\/[^:\s]+\.(?:kt|java)):(\d+):(\d+)\s*(.*)$/);
+      if (!m) return;
+      const file = state.list.filter((f) => f.path === m[1] || f.path.endsWith('/' + m[1]) || f.path.endsWith('/' + m[1].split('/').pop()))[0];
+      found.push({
+        file: file ? file.path : m[1],
+        line: Number(m[2]),
+        message: (m[4] || 'compile error').trim()
+      });
+    });
+    // One entry per distinct failure, newest last, so a rebuild does not pile up.
+    const seen = {};
+    state.buildErrors = found.filter((e) => {
+      const key = e.file + ':' + e.line + ':' + e.message;
+      if (seen[key]) return false;
+      seen[key] = 1;
+      return true;
+    }).slice(-12);
+    renderProblems();
   }
 
   function addHistory(entry) {

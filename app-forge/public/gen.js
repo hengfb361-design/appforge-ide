@@ -1983,6 +1983,151 @@
     return stack.length ? 'unclosed <' + stack[stack.length - 1] + '>' : '';
   }
 
+  /* ------------------------------- auto fix -------------------------------- */
+
+  /* A web project starts from a page; give one to a project that has none so a
+     build never fails on a file the app could not run without anyway. */
+  function starterIndex(name) {
+    const title = String(name || 'App').replace(/[<>&"']/g, '');
+    return [
+      '<!doctype html>',
+      '<html lang="km">',
+      '<head>',
+      '  <meta charset="utf-8" />',
+      '  <meta name="viewport" content="width=device-width, initial-scale=1" />',
+      '  <title>' + title + '</title>',
+      '  <style>',
+      '    body { margin: 0; min-height: 100vh; display: grid; place-items: center;',
+      '      font-family: system-ui, sans-serif; background: #0e1117; color: #e6edf5; }',
+      '    h1 { font-size: 22px; }',
+      '  </style>',
+      '</head>',
+      '<body>',
+      '  <h1>' + title + '</h1>',
+      '</body>',
+      '</html>',
+      ''
+    ].join('\n');
+  }
+
+  /* Kotlin forbids `const` on a local variable, and the fix is always to drop the
+     modifier. Blocks are tracked so a `const val` inside a companion object --
+     where it is legal -- is left alone. */
+  function fixLocalConst(text) {
+    const lines = text.split('\n');
+    const stack = [];
+    let inBlockComment = false;
+    let count = 0;
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const trimmed = line.trim();
+      if (inBlockComment) {
+        if (trimmed.indexOf('*/') >= 0) inBlockComment = false;
+        continue;
+      }
+      if (trimmed.indexOf('/*') >= 0 && trimmed.indexOf('*/') < 0) {
+        inBlockComment = true;
+        continue;
+      }
+      if (trimmed.indexOf('//') === 0) continue;
+      let opened = 0;
+      let closed = 0;
+      for (let c = 0; c < trimmed.length; c++) {
+        if (trimmed[c] === '{') opened++;
+        else if (trimmed[c] === '}') closed++;
+      }
+      const head = trimmed.split('{')[0];
+      const kind = /\bfun\b/.test(head) ? 'fun'
+        : /\b(class|object|interface)\b/.test(head) ? 'type' : 'block';
+      if (/^\s*const\s+val\b/.test(line) && stack.indexOf('fun') >= 0) {
+        lines[i] = line.replace(/(\s)const\s+val\b/, '$1val');
+        count++;
+      }
+      for (let o = 0; o < opened; o++) stack.push(kind);
+      for (let c2 = 0; c2 < closed; c2++) stack.pop();
+    }
+    return { text: lines.join('\n'), count: count };
+  }
+
+  /* Uses of sqrt/hypot/abs and friends without their kotlin.math import. */
+  function addMathImports(text) {
+    const names = ['sqrt', 'hypot', 'abs', 'atan2', 'cos', 'sin', 'tan', 'pow', 'PI'];
+    const missing = [];
+    names.forEach((name) => {
+      const used = name === 'PI' ? /\bPI\b/.test(text) : new RegExp('\\b' + name + '\\s*\\(').test(text);
+      if (!used) return;
+      if (new RegExp('import\\s+kotlin\\.math\\.' + name + '\\b').test(text)) return;
+      if (/import\s+kotlin\.math\.\*/.test(text)) return;
+      if (new RegExp('(fun|val|var|class|object)\\s+' + name + '\\b').test(text)) return;
+      missing.push(name);
+    });
+    if (!missing.length) return { text: text, added: [] };
+    const lines = text.split('\n');
+    let at = -1;
+    lines.forEach((line, i) => { if (/^\s*import\s+/.test(line)) at = i; });
+    if (at < 0) lines.forEach((line, i) => { if (/^\s*package\s+/.test(line)) at = i; });
+    const block = missing.map((name) => 'import kotlin.math.' + name);
+    lines.splice(at + 1, 0, block.join('\n'));
+    return { text: lines.join('\n'), added: missing };
+  }
+
+  /**
+   * Repairs a project before it is built.
+   *
+   * Only changes with a single correct form are made -- a missing or wrong
+   * package line, `const val` inside a function, a missing kotlin.math import,
+   * and a web project with no start page. Everything else is left to the
+   * compiler, whose messages are shown to the user.
+   */
+  function autoFix(cfg, projectFiles) {
+    const list = Array.isArray(projectFiles) ? projectFiles : [];
+    const pkg = String((cfg && cfg.pkg) || '').trim();
+    const fixes = [];
+    const out = list.map((f) => Object.assign({}, f));
+
+    out.forEach((f) => {
+      if (typeof f.text !== 'string' || !/\.kt$/.test(f.path)) return;
+      let text = f.text.replace(/^\uFEFF/, '');
+      const declared = text.match(/^\s*package\s+([A-Za-z0-9_.]+)\s*$/m);
+      if (!declared && pkg) {
+        text = 'package ' + pkg + '\n\n' + text;
+        fixes.push(f.path + ': បន្ថែម package ' + pkg);
+      } else if (declared && pkg && declared[1] !== pkg) {
+        text = text.replace(declared[0], 'package ' + pkg);
+        fixes.push(f.path + ': package ' + declared[1] + ' → ' + pkg);
+      }
+      const constant = fixLocalConst(text);
+      if (constant.count) {
+        text = constant.text;
+        fixes.push(f.path + ': ' + constant.count + ' × const val ក្នុង function → val');
+      }
+      const math = addMathImports(text);
+      if (math.added.length) {
+        text = math.text;
+        fixes.push(f.path + ': បន្ថែម import kotlin.math.' + math.added.join(', kotlin.math.'));
+      }
+      f.text = text;
+    });
+
+    // The WebView needs a start page, and a project with no Android files at all
+    // is a web project, so either way this is the file the APK opens first.
+    const hasIndex = out.some((f) => f.path === 'index.html');
+    const native = out.some((f) => /^(app\/src\/main|build\.gradle|settings\.gradle)/.test(f.path));
+    // A web project always needs one; a native one only when it already ships
+    // web assets, because that WebView loads nothing without a start page.
+    const www = out.some((f) => f.path.indexOf('app/src/main/assets/www/') === 0);
+    const wwwIndex = out.some((f) => f.path === 'app/src/main/assets/www/index.html');
+    if (!hasIndex && !native) {
+      out.push({ path: 'index.html', text: starterIndex((cfg && cfg.name) || 'App') });
+      fixes.push('index.html: បង្កើតទំព័រចាប់ផ្ដើម (បើកដំណើរការ APK)');
+    } else if (!hasIndex && www && !wwwIndex) {
+      out.push({ path: 'index.html', text: starterIndex((cfg && cfg.name) || 'App') });
+      fixes.push('index.html: បង្កើតទំព័រចាប់ផ្ដើមសម្រាប់ WebView');
+    }
+
+    return { files: out, fixes: fixes };
+  }
+
   function verify(result) {
     const issues = [];
     const files = (result && result.files) || [];
@@ -2067,8 +2212,11 @@
     if (cfg.template === 'webview' && cfg.pull && !map['app/src/main/res/layout/activity_main.xml']) {
       issues.push('Refresh បើកតែគ្មាន layout');
     }
-    const isProject = files.some((f) => f.path.indexOf('app/src/main/assets/www/') === 0);
-    if (isProject && !map['app/src/main/assets/www/index.html']) {
+    // Only a real web page needs a start file; README and .gitignore are copied
+    // into assets/www by the builder and do not make this a web project.
+    const pageLike = files.filter((f) => f.path.indexOf('app/src/main/assets/www/') === 0 &&
+      /\.(html?|css|js|mjs|svg|png|jpe?g|webp|gif|ico|woff2?|ttf|json)$/i.test(f.path));
+    if (pageLike.length && !map['app/src/main/assets/www/index.html']) {
       issues.push('ខ្វះ index.html នៅ root គម្រោង (វាជាចំណុចចាប់ផ្តើមរបស់ WebView)');
     }
 
@@ -2167,6 +2315,7 @@
     normalize: normalize,
     parseDescription: descScreens,
     verify: verify,
+    autoFix: autoFix,
     build: build,
     buildProject: buildProject,
     zip: zip

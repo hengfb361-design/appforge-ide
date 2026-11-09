@@ -1136,6 +1136,29 @@ def _gh(method: str, path: str, payload=None):
     )
 
 
+def _af_run_logs(full: str, run_id):
+    """Download a run's log bundle.
+
+    GitHub answers /actions/runs/<id>/logs with a 302 to a short-lived storage
+    URL that rejects our Authorization header, so the redirect is read once and
+    followed without it. The old code asked the wrong path and always fell back
+    to the step summary — which is why a failed build showed no compiler error.
+    """
+    url = "%s/repos/%s/actions/runs/%s/logs" % (_AF_API, full, run_id)
+    resp = requests.get(url, timeout=60, allow_redirects=False, headers={
+        "Authorization": "Bearer " + _af_token(),
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "AppForge/1.0",
+    })
+    if resp.status_code in (301, 302, 303, 307, 308):
+        target = resp.headers.get("Location") or ""
+        if not target:
+            return None
+        return requests.get(target, timeout=90, headers={"User-Agent": "AppForge/1.0"})
+    return resp
+
+
 _AF_SCOPE_CACHE = {"fp": "", "at": 0.0, "data": None}
 
 
@@ -1677,10 +1700,9 @@ def appforge_logs(repo: str = ""):
                 lines.append("  %s %s" % (step.get("conclusion") or step.get("status"),
                                          step.get("name")))
         text, note = "", ""
-        log_url = "/repos/%s/actions/runs/%s/logs" % (full, run.get("id"))
         try:
-            logs = _gh("GET", log_url.replace("/repos", ""))
-            if logs.status_code == 200:
+            logs = _af_run_logs(full, run.get("id"))
+            if logs is not None and logs.status_code == 200:
                 try:
                     bundle = zipfile.ZipFile(io.BytesIO(logs.content))
                     chunks = []
@@ -1690,13 +1712,14 @@ def appforge_logs(repo: str = ""):
                     text = "\n".join(chunks)
                 except zipfile.BadZipFile:
                     text = logs.text
-            else:
+            elif logs is not None:
                 note = "log មិនទាន់រួចរាល់ (GitHub %s)" % logs.status_code
         except requests.RequestException as exc:
             note = str(exc)[:120]
+        # A compiler error sits at the end of the run, so the tail is what matters.
         return {"ok": True, "state": "running" if run.get("status") != "completed" else "done",
                 "conclusion": run.get("conclusion") or "", "steps": steps,
-                "logs": (text or "\n".join(lines))[-20000:], "note": note,
+                "logs": (text or "\n".join(lines))[-40000:], "note": note,
                 "run_url": run.get("html_url") or ""}
     except requests.RequestException as exc:
         return JSONResponse({"detail": str(exc)[:120]}, status_code=502)

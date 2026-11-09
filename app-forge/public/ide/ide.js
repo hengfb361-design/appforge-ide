@@ -1241,6 +1241,14 @@
       $('#buildlog').textContent = d.logs || '(គ្មាន log)';
       showBottom('buildlog');
       parseBuildErrors(d.logs);
+      // The panel said "failed" with no reason; put the first real error there
+      // so the answer does not need a second tap into the log.
+      if (state.build.last === 'failed' && state.buildErrors.length) {
+        const first = state.buildErrors[0];
+        $('#buildState').textContent = '✖ Build បរាជ័យ — ' +
+          (first.file !== 'build' && first.file !== 'res' ? first.file + (first.line ? ':' + first.line + ' ' : ' — ') : '') +
+          first.message;
+      }
       if (d.run_url) {
         $('#repoLink').href = d.run_url;
       }
@@ -1249,43 +1257,102 @@
     }
   }
 
-  /* The compiler reports "e: file:///…/app/src/main/java/…/Foo.kt:12:3 message".
-     Those lines become clickable problems so the file opens at the failing
-     line instead of leaving the user to scroll the whole log. */
+  /* Build logs come from four different tools, so each shape gets its own
+     pattern: Kotlin ("e: file:///…/Foo.kt:12:3 …"), Java ("Foo.java:12:
+     error: …"), AAPT ("ERROR: …/AndroidManifest.xml:8:5-31:19: AAPT: error:
+     resource mipmap/ic_launcher … not found"), the manifest merger and Gradle
+     itself. Every match becomes one short, clickable line in Problems, so a
+     red build says what is wrong with the code instead of only "failed". */
+  function projectPath(raw) {
+    const clean = String(raw || '').replace(/^file:\/\//, '').replace(/\\/g, '/');
+    const m = clean.match(/(app\/(?:src\/main\/|build\.gradle)[^:\s]*)$/) ||
+      clean.match(/((?:build|settings)\.gradle(?:\.kts)?)$/);
+    if (m) return m[1];
+    return clean.split('/').pop() || clean;
+  }
+
   function parseBuildErrors(text) {
     const found = [];
-    String(text || '').split('\n').forEach((line) => {
-      // A failed Gradle download is the build server's problem, not the code's;
-      // say so instead of showing nothing next to "Build failed".
-      const net = line.match(/Unexpected HTTP response: (\d+)/) ||
-        line.match(/(?:Could not|Failed to) (?:resolve|download|GET|connect to)\s+'?(https?:\/\/[^\s']+)/);
-      if (net && /error|Error|##\[error\]/.test(line)) {
-        found.push({
-          file: 'build',
-          line: 0,
-          message: net[2]
+    const add = (file, line, message) => {
+      const msg = String(message || '').replace(/\s+/g, ' ').trim().slice(0, 300);
+      if (!msg) return;
+      found.push({ file: file, line: Number(line) || 0, message: msg });
+    };
+    let inReason = false;
+    String(text || '')
+      .replace(/\u001b\[[0-9;]*m/g, '')
+      .split('\n')
+      .forEach((raw) => {
+        // GitHub puts an ISO timestamp on every line; it is not part of the error.
+        const line = raw.replace(/^\s*\d{4}-\d\d-\d\dT[\d:.]+Z\s?/, '').trim();
+        if (!line) return;
+
+        // A failed Gradle download is the build server's problem, not the code's;
+        // say so instead of showing nothing next to "Build failed".
+        const net = line.match(/Unexpected HTTP response: (\d+)/) ||
+          line.match(/(?:Could not|Failed to) (?:resolve|download|GET|connect to)\s+'?(https?:\/\/[^\s']+)/);
+        if (net && /error|Error|##\[error\]/.test(line)) {
+          add('build', 0, net[2]
             ? 'ទាញ ' + net[2] + ' មិនបាន — បណ្តាញមានបញ្ហា សូមចុច Build ម្តងទៀត'
-            : 'ទាញ Gradle មិនបាន (HTTP ' + net[1] + ') — សូមចុច Build ម្តងទៀត'
-        });
-        return;
-      }
-      const m = line.match(/e: (?:file:\/\/\/)?(?:.*?\/)?((?:app|src)\/[^:\s]+\.(?:kt|java)):(\d+):(\d+)\s*(.*)$/);
-      if (!m) return;
-      const file = state.list.filter((f) => f.path === m[1] || f.path.endsWith('/' + m[1]) || f.path.endsWith('/' + m[1].split('/').pop()))[0];
-      found.push({
-        file: file ? file.path : m[1],
-        line: Number(m[2]),
-        message: (m[4] || 'compile error').trim()
+            : 'ទាញ Gradle មិនបាន (HTTP ' + net[1] + ') — សូមចុច Build ម្តងទៀត');
+          return;
+        }
+
+        // Kotlin "e: file:///…/Foo.kt:12:5 msg" / Java "Foo.java:12: error: msg".
+        const src = line.match(/(?:^|\s)(?:e: )?(?:file:\/\/\/)?(\S+\.(?:kt|java)):(\d+):(?:(\d+)(?::|\s))?\s*(?:error:\s*)?(.*)$/);
+        if (src && !/^warning:/.test((src[4] || '').trim())) {
+          add(projectPath(src[1]), src[2], src[4]);
+          return;
+        }
+
+        // AAPT: the resource the manifest or a layout asks for is not in res/.
+        const aapt = line.match(/AAPT:\s*error:\s*(.+)$/) || line.match(/\berror:\s*(resource\s+\S+.*)$/);
+        if (aapt) {
+          const loc = line.match(/(\S+\.xml):(\d+)/);
+          const res = aapt[1].match(/resource\s+([A-Za-z0-9_-]+\/[A-Za-z0-9_.-]+)/);
+          add(loc ? projectPath(loc[1]) : 'res', loc ? loc[2] : 0, res
+            ? 'រកមិនឃើញ @' + res[1] + ' — បន្ថែមឯកសារ res/' + res[1] + ' ឬកែការយោងឱ្យត្រូវ'
+            : aapt[1]);
+          return;
+        }
+
+        // Manifest merger: two libraries want different values for one attribute.
+        const merge = line.match(/Manifest merger failed\s*:?\s*(.*)$/);
+        if (merge) {
+          add('app/src/main/AndroidManifest.xml', 0, 'Manifest មិនឆបគ្នា: ' + (merge[1] || ''));
+          return;
+        }
+
+        // Gradle's own summary: "* What went wrong:" then "> Execution failed…".
+        if (/^\* What went wrong:/.test(line)) { inReason = true; return; }
+        if (inReason && /^>\s+/.test(line)) {
+          const task = line.match(/Execution failed for task '([^']+)'/);
+          const body = line.replace(/^>\s+/, '');
+          // The wrapper AGP prints around the real cause says nothing useful.
+          if (!/^A failure occurred while executing/.test(body)) {
+            add('build', 0, task ? 'Gradle task ' + task[1] + ' បរាជ័យ — មើល error ខាងលើ' : body);
+          }
+          inReason = false;
+          return;
+        }
+        if (/^\s*\* Try:/.test(line)) inReason = false;
       });
-    });
     // One entry per distinct failure, newest last, so a rebuild does not pile up.
+    const fileMatch = (p) => state.list.filter((f) => f.path === p || f.path.endsWith('/' + p) || f.path.endsWith('/' + p.split('/').pop()))[0];
     const seen = {};
-    state.buildErrors = found.filter((e) => {
+    const unique = found.map((e) => {
+      const hit = fileMatch(e.file);
+      return { file: hit ? hit.path : e.file, line: e.line, message: e.message };
+    }).filter((e) => {
       const key = e.file + ':' + e.line + ':' + e.message;
       if (seen[key]) return false;
       seen[key] = 1;
       return true;
-    }).slice(-12);
+    });
+    // A real file:line beats Gradle's summary, so the panel leads with the
+    // error the user can actually fix.
+    state.buildErrors = unique.filter((e) => e.file !== 'build')
+      .concat(unique.filter((e) => e.file === 'build')).slice(0, 12);
     renderProblems();
   }
 

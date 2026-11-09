@@ -2213,6 +2213,43 @@
    * and a web project with no start page. Everything else is left to the
    * compiler, whose messages are shown to the user.
    */
+  /* A manifest that points at an icon the project does not ship is the most
+     common first-build failure ("AAPT: error: resource mipmap/ic_launcher not
+     found"), because the manifest is the one file users edit by hand. Point it
+     at the icon that does exist, or create the missing one. */
+  function fixIconRefs(cfg, list) {
+    const manifest = list.filter((f) => f.path === 'app/src/main/AndroidManifest.xml')[0];
+    if (!manifest || typeof manifest.text !== 'string') return [];
+    const have = { mipmap: {}, drawable: {} };
+    list.forEach((f) => {
+      const m = String(f.path).match(/^app\/src\/main\/res\/(mipmap|drawable)(?:-[A-Za-z0-9]+)?\/([A-Za-z0-9_]+)\.(?:xml|png|webp|jpe?g)$/);
+      if (m) have[m[1]][m[2]] = f.path;
+    });
+    const fixes = [];
+    let text = manifest.text;
+    ['android:icon', 'android:roundIcon'].forEach((attr) => {
+      const re = new RegExp('(' + attr + '=")@mipmap\\/([A-Za-z0-9_]+)(")');
+      const ref = text.match(re);
+      if (!ref) return;
+      const name = ref[2];
+      if (have.mipmap[name]) return;
+      if (have.drawable[name]) {
+        text = text.replace(re, '$1@drawable/' + name + '$3');
+        fixes.push('AndroidManifest.xml: @mipmap/' + name + ' → @drawable/' + name + ' (mipmap មិនមាន)');
+        return;
+      }
+      const path = 'app/src/main/res/drawable/' + name + '.xml';
+      if (!list.some((f) => f.path === path)) {
+        list.push({ path: path, text: launcherXml({ color: (cfg && cfg.color) || '#12B886' }) });
+        fixes.push(path + ': បង្កើតរូបតំណាងដែល Manifest យោង');
+      }
+      text = text.replace(re, '$1@drawable/' + name + '$3');
+      fixes.push('AndroidManifest.xml: @mipmap/' + name + ' → @drawable/' + name);
+    });
+    if (text !== manifest.text) manifest.text = text;
+    return fixes;
+  }
+
   function autoFix(cfg, projectFiles) {
     const list = Array.isArray(projectFiles) ? projectFiles : [];
     const pkg = String((cfg && cfg.pkg) || '').trim();
@@ -2242,6 +2279,8 @@
       }
       f.text = text;
     });
+
+    fixIconRefs(cfg, out).forEach((line) => fixes.push(line));
 
     // The WebView needs a start page, and a project with no Android files at all
     // is a web project, so either way this is the file the APK opens first.
@@ -2314,6 +2353,15 @@
 
     const theme = 'Theme.' + pascal(cfg.name || 'My App');
     const manifest = map['app/src/main/AndroidManifest.xml'] || '';
+
+    // The mismatch AAPT reports three minutes later, caught before the push.
+    (manifest.match(/android:(?:icon|roundIcon)="@mipmap\/([A-Za-z0-9_]+)"/g) || []).forEach((ref) => {
+      const name = ref.split('/').pop().replace(/"$/, '');
+      const pattern = new RegExp('^app/src/main/res/mipmap(?:-[a-z0-9]+)?/' + name + '\\.(?:xml|png|webp|jpe?g)$');
+      if (!files.some((f) => pattern.test(f.path))) {
+        issues.push('Manifest យោង @mipmap/' + name + ' តែគ្មាន res/mipmap/' + name + ' — AAPT នឹងបរាជ័យ');
+      }
+    });
 
     if (cfg.template === 'system') {
       ['SYSTEM_ALERT_WINDOW', 'FOREGROUND_SERVICE_SPECIAL_USE', 'RECEIVE_BOOT_COMPLETED',

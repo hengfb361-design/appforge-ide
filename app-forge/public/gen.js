@@ -17,6 +17,7 @@
     { id: 'java', label: 'Native Android (Java)', desc: 'គម្រោង Java + XML សម្រាប់ Android', icon: '☕' },
     { id: 'ndk', label: 'C/C++ Android NDK', desc: 'JNI + CMake — កូដ C++ ក្លាយជា .so ក្នុង APK', icon: '⚙️' },
     { id: 'system', label: 'System App (Android)', desc: 'Overlay, Device Admin, boot service, shell/root — ជម្រៅប្រព័ន្ធ Android', icon: '🛡️' },
+    { id: 'agent', label: 'AI Phone (Groq)', desc: 'Overlay បញ្ជាទូរស័ព្ទ: បើក app, អូសអេក្រង់, AI ប្តូរ model ពេល rate limit', icon: '🤖' },
     { id: 'notes', label: 'App កត់ត្រា', desc: 'សរសេរ/លុបកំណត់ត្រា រក្សាទុកក្នុងទូរស័ព្ទ', icon: '📝' }
   ];
 
@@ -229,6 +230,15 @@
         if (perms.indexOf(p) < 0) perms.push(p);
       });
     }
+    // The AI assistant needs an overlay to be driven from anywhere, a service it
+    // can keep alive, and the app list so a name like "tiktok" resolves.
+    if (c.template === 'agent') {
+      ['SYSTEM_ALERT_WINDOW', 'FOREGROUND_SERVICE', 'FOREGROUND_SERVICE_SPECIAL_USE',
+        'POST_NOTIFICATIONS', 'QUERY_ALL_PACKAGES', 'RECEIVE_BOOT_COMPLETED',
+        'WAKE_LOCK', 'REQUEST_IGNORE_BATTERY_OPTIMIZATIONS'].forEach((p) => {
+        if (perms.indexOf(p) < 0) perms.push(p);
+      });
+    }
     const systemParts = c.template === 'system' ? [
       '        <receiver',
       '            android:name=".AdminReceiver"',
@@ -255,6 +265,27 @@
       '            <property',
       '                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"',
       '                android:value="system overlay utility" />',
+      '        </service>'
+    ].join('\n') : null;
+    const agentParts = c.template === 'agent' ? [
+      '        <service',
+      '            android:name=".OverlayService"',
+      '            android:exported="false"',
+      '            android:foregroundServiceType="specialUse">',
+      '            <property',
+      '                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"',
+      '                android:value="ai assistant overlay" />',
+      '        </service>',
+      '        <service',
+      '            android:name=".AgentAccessibilityService"',
+      '            android:exported="true"',
+      '            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">',
+      '            <intent-filter>',
+      '                <action android:name="android.accessibilityservice.AccessibilityService" />',
+      '            </intent-filter>',
+      '            <meta-data',
+      '                android:name="android.accessibilityservice"',
+      '                android:resource="@xml/accessibility_config" />',
       '        </service>'
     ].join('\n') : null;
     const permLines = perms.map((p) =>
@@ -284,6 +315,7 @@
       '            </intent-filter>',
       '        </activity>',
       systemParts,
+      agentParts,
       '    </application>',
       '</manifest>',
       ''
@@ -295,6 +327,7 @@
       '<?xml version="1.0" encoding="utf-8"?>',
       '<resources>',
       '    <string name="app_name">' + escapeXml(c.name) + '</string>',
+      '    <string name="accessibility_description">AI Phone បើក app និងអូសអេក្រង់តាមបញ្ជារបស់អ្នក។</string>',
       '</resources>',
       ''
     ].join('\n');
@@ -1156,6 +1189,184 @@
     ].join('\n');
   }
 
+  /* ── AI Phone: overlay command panel, accessibility gestures, Groq models ──
+     The phone is driven the way its owner drives it: an accessibility service
+     opens a package and swipes the screen. The model only turns a sentence into
+     steps, and a rate-limited model is swapped for the next one. */
+
+  /* The Groq client and the task runner live in agent.js: the browser loads it
+     with a script tag, Node with require, and the generator asks for them here. */
+  let AGENT_EXTRA = null;
+  function agentExtra() {
+    if (AGENT_EXTRA) return AGENT_EXTRA;
+    try {
+      if (typeof module === 'object' && module.exports && typeof require === 'function') {
+        AGENT_EXTRA = require('./agent.js');
+      } else if (typeof self !== 'undefined' && self.AppForgeAgent) {
+        AGENT_EXTRA = self.AppForgeAgent;
+      }
+    } catch (e) {
+      AGENT_EXTRA = null;
+    }
+    return AGENT_EXTRA || {};
+  }
+
+  function accessibilityConfigXml() {
+    return [
+      '<?xml version="1.0" encoding="utf-8"?>',
+      '<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"',
+      '    android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged"',
+      '    android:accessibilityFeedbackType="feedbackGeneric"',
+      '    android:accessibilityFlags="flagDefault|flagRetrieveInteractiveWindows"',
+      '    android:canPerformGestures="true"',
+      '    android:canRetrieveWindowContent="true"',
+      '    android:description="@string/accessibility_description"',
+      '    android:notificationTimeout="100" />',
+      ''
+    ].join('\n');
+  }
+
+  function activityAgentXml() {
+    const button = (id, text) => [
+      '        <Button',
+      '            android:id="@+id/' + id + '"',
+      '            android:layout_width="match_parent"',
+      '            android:layout_height="wrap_content"',
+      '            android:layout_marginTop="8dp"',
+      '            android:text="' + text + '" />'
+    ];
+    return [
+      '<?xml version="1.0" encoding="utf-8"?>',
+      '<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"',
+      '    android:layout_width="match_parent"',
+      '    android:layout_height="match_parent"',
+      '    android:background="@color/page"',
+      '    android:fillViewport="true">',
+      '',
+      '    <LinearLayout',
+      '        android:layout_width="match_parent"',
+      '        android:layout_height="wrap_content"',
+      '        android:orientation="vertical"',
+      '        android:padding="20dp">',
+      '',
+      '        <TextView',
+      '            android:layout_width="wrap_content"',
+      '            android:layout_height="wrap_content"',
+      '            android:text="@string/app_name"',
+      '            android:textColor="@color/text"',
+      '            android:textSize="22sp"',
+      '            android:textStyle="bold" />',
+      '',
+      '        <TextView',
+      '            android:id="@+id/status"',
+      '            android:layout_width="match_parent"',
+      '            android:layout_height="wrap_content"',
+      '            android:layout_marginTop="6dp"',
+      '            android:paddingBottom="10dp"',
+      '            android:text="checking"',
+      '            android:textColor="#9FB3C8"',
+      '            android:textSize="12sp" />',
+      '',
+      '        <EditText',
+      '            android:id="@+id/groqKey"',
+      '            android:layout_width="match_parent"',
+      '            android:layout_height="wrap_content"',
+      '            android:hint="Groq API key (gsk_...)"',
+      '            android:importantForAutofill="no"',
+      '            android:inputType="textVisiblePassword"',
+      '            android:textColor="@color/text"',
+      '            android:textColorHint="#7A889B" />',
+      ''
+    ].concat(
+      button('btnSaveKey', 'រក្សាទុក Groq key'),
+      button('btnOverlay', 'សិទ្ធិ Overlay'),
+      button('btnAccess', 'បើក Accessibility'),
+      button('btnStart', 'ចាប់ផ្ដើម AI overlay'),
+      button('btnStop', 'បញ្ឈប់ overlay')
+    ).concat([
+      '',
+      '        <TextView',
+      '            android:layout_width="match_parent"',
+      '            android:layout_height="wrap_content"',
+      '            android:layout_marginTop="16dp"',
+      '            android:text="បញ្ជា: បើក tiktok អូស 20 · OPEN:tiktok SCROLL:20"',
+      '            android:textColor="#7A889B"',
+      '            android:textSize="12sp" />',
+      '',
+      '    </LinearLayout>',
+      '</ScrollView>',
+      ''
+    ]).join('\n');
+  }
+
+  function mainActivityAgent(c) {
+    return [
+      'package ' + c.pkg,
+      '',
+      'import android.content.Intent',
+      'import android.net.Uri',
+      'import android.os.Build',
+      'import android.os.Bundle',
+      'import android.provider.Settings',
+      'import android.widget.Button',
+      'import android.widget.EditText',
+      'import android.widget.TextView',
+      'import androidx.appcompat.app.AppCompatActivity',
+      'import androidx.core.content.ContextCompat',
+      '',
+      '/** Setup screen: the key, the two system toggles, and the agent service. */',
+      'class MainActivity : AppCompatActivity() {',
+      '    private lateinit var status: TextView',
+      '    private lateinit var keyField: EditText',
+      '',
+      '    override fun onCreate(savedInstanceState: Bundle?) {',
+      '        super.onCreate(savedInstanceState)',
+      '        setContentView(R.layout.activity_agent)',
+      '        status = findViewById(R.id.status)',
+      '        keyField = findViewById(R.id.groqKey)',
+      '        keyField.setText(Prefs.key(this))',
+      '',
+      '        findViewById<Button>(R.id.btnSaveKey).setOnClickListener {',
+      '            Prefs.setKey(this, keyField.text.toString().trim())',
+      '            show("API key បានរក្សាទុក ✓")',
+      '        }',
+      '        findViewById<Button>(R.id.btnOverlay).setOnClickListener {',
+      '            startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + packageName)))',
+      '        }',
+      '        findViewById<Button>(R.id.btnAccess).setOnClickListener {',
+      '            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))',
+      '        }',
+      '        findViewById<Button>(R.id.btnStart).setOnClickListener {',
+      '            ContextCompat.startForegroundService(this, Intent(this, OverlayService::class.java))',
+      '            show("AI overlay ដំណើរការ — ចុចប៊ូប AI")',
+      '        }',
+      '        findViewById<Button>(R.id.btnStop).setOnClickListener {',
+      '            stopService(Intent(this, OverlayService::class.java))',
+      '            show("បានបញ្ឈប់ overlay")',
+      '        }',
+      '        if (Build.VERSION.SDK_INT >= 33) {',
+      '            requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 1)',
+      '        }',
+      '    }',
+      '',
+      '    override fun onResume() {',
+      '        super.onResume()',
+      '        show(stateLine())',
+      '    }',
+      '',
+      '    private fun stateLine(): String =',
+      '        "overlay: " + Settings.canDrawOverlays(this) +',
+      '            " · accessibility: " + (AgentAccessibilityService.instance != null) +',
+      '            " · key: " + Prefs.key(this).isNotEmpty()',
+      '',
+      '    private fun show(text: String) {',
+      '        status.text = text',
+      '    }',
+      '}',
+      ''
+    ].join('\n');
+  }
+
   function workflowYaml(c) {
     const target = c.target || 'debug';
     const signed = target !== 'debug';
@@ -1328,6 +1539,277 @@
     ] : []).join('\n');
   }
 
+  function agentAccessibilityKt(c) {
+    return [
+      'package ' + c.pkg,
+      '',
+      'import android.accessibilityservice.AccessibilityService',
+      'import android.accessibilityservice.GestureDescription',
+      'import android.content.Intent',
+      'import android.graphics.Path',
+      'import android.view.accessibility.AccessibilityEvent',
+      '',
+      '/** The hands of the agent: launch a package, swipe, go back or home. */',
+      'class AgentAccessibilityService : AccessibilityService() {',
+      '    override fun onServiceConnected() {',
+      '        super.onServiceConnected()',
+      '        instance = this',
+      '    }',
+      '',
+      '    override fun onAccessibilityEvent(event: AccessibilityEvent?) {}',
+      '',
+      '    override fun onInterrupt() {}',
+      '',
+      '    override fun onDestroy() {',
+      '        if (instance === this) instance = null',
+      '        super.onDestroy()',
+      '    }',
+      '',
+      '    fun screenSize(): Pair<Int, Int> {',
+      '        val metrics = resources.displayMetrics',
+      '        return Pair(metrics.widthPixels, metrics.heightPixels)',
+      '    }',
+      '',
+      '    fun openApp(pkg: String): Boolean {',
+      '        val intent = packageManager.getLaunchIntentForPackage(pkg) ?: return false',
+      '        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)',
+      '        startActivity(intent)',
+      '        return true',
+      '    }',
+      '',
+      '    fun swipeUp(): Boolean {',
+      '        val metrics = resources.displayMetrics',
+      '        val x = metrics.widthPixels / 2f',
+      '        val path = Path().apply {',
+      '            moveTo(x, metrics.heightPixels * 0.78f)',
+      '            lineTo(x, metrics.heightPixels * 0.22f)',
+      '        }',
+      '        val gesture = GestureDescription.Builder()',
+      '            .addStroke(GestureDescription.StrokeDescription(path, 0, 300))',
+      '            .build()',
+      '        return dispatchGesture(gesture, null, null)',
+      '    }',
+      '',
+      '    fun back(): Boolean = performGlobalAction(GLOBAL_ACTION_BACK)',
+      '',
+      '    fun home(): Boolean = performGlobalAction(GLOBAL_ACTION_HOME)',
+      '',
+      '    companion object {',
+      '        @Volatile',
+      '        var instance: AgentAccessibilityService? = null',
+      '            private set',
+      '    }',
+      '}',
+      ''
+    ].join('\n');
+  }
+
+  function overlayAgentKt(c) {
+    return [
+      'package ' + c.pkg,
+      '',
+      'import android.app.Notification',
+      'import android.app.NotificationChannel',
+      'import android.app.NotificationManager',
+      'import android.app.Service',
+      'import android.content.Intent',
+      'import android.graphics.Color',
+      'import android.graphics.PixelFormat',
+      'import android.graphics.Typeface',
+      'import android.os.Build',
+      'import android.os.Handler',
+      'import android.os.IBinder',
+      'import android.os.Looper',
+      'import android.provider.Settings',
+      'import android.text.method.ScrollingMovementMethod',
+      'import android.view.Gravity',
+      'import android.view.WindowManager',
+      'import android.view.inputmethod.EditorInfo',
+      'import android.widget.Button',
+      'import android.widget.EditText',
+      'import android.widget.LinearLayout',
+      'import android.widget.TextView',
+      'import androidx.core.app.NotificationCompat',
+      '',
+      '/** Floating AI bubble that opens the command panel above every app. */',
+      'class OverlayService : Service() {',
+      '    private var manager: WindowManager? = null',
+      '    private var bubble: TextView? = null',
+      '    private var panel: LinearLayout? = null',
+      '    private var logView: TextView? = null',
+      '    private val ui = Handler(Looper.getMainLooper())',
+      '    private val density: Float get() = resources.displayMetrics.density',
+      '',
+      '    override fun onBind(intent: Intent?): IBinder? = null',
+      '',
+      '    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {',
+      '        startForeground(NOTIFICATION_ID, notification())',
+      '        AgentLog.sink = { line -> append(line) }',
+      '        if (bubble == null && panel == null) showBubble()',
+      '        return START_STICKY',
+      '    }',
+      '',
+      '    private fun notification(): Notification {',
+      '        val nm = getSystemService(NotificationManager::class.java)',
+      '        nm.createNotificationChannel(',
+      '            NotificationChannel(CHANNEL_ID, "AI Phone", NotificationManager.IMPORTANCE_LOW)',
+      '        )',
+      '        return NotificationCompat.Builder(this, CHANNEL_ID)',
+      '            .setContentTitle("AI Phone")',
+      '            .setContentText("ចុចប៊ូប AI ដើម្បីបញ្ជា")',
+      '            .setSmallIcon(android.R.drawable.ic_menu_compass)',
+      '            .setOngoing(true)',
+      '            .build()',
+      '    }',
+      '',
+      '    private fun dp(value: Int): Int = (value * density).toInt()',
+      '',
+      '    @Suppress("DEPRECATION")',
+      '    private fun overlayType(): Int =',
+      '        if (Build.VERSION.SDK_INT >= 26) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY',
+      '        else WindowManager.LayoutParams.TYPE_PHONE',
+      '',
+      '    private fun params(focusable: Boolean): WindowManager.LayoutParams {',
+      '        val p = WindowManager.LayoutParams(',
+      '            WindowManager.LayoutParams.WRAP_CONTENT,',
+      '            WindowManager.LayoutParams.WRAP_CONTENT,',
+      '            overlayType(),',
+      '            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,',
+      '            PixelFormat.TRANSLUCENT',
+      '        )',
+      '        if (!focusable) p.flags = p.flags or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE',
+      '        p.gravity = Gravity.TOP or Gravity.START',
+      '        p.x = dp(8)',
+      '        p.y = dp(96)',
+      '        p.softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE',
+      '        return p',
+      '    }',
+      '',
+      '    private fun showBubble() {',
+      '        if (!Settings.canDrawOverlays(this)) {',
+      '            stopSelf()',
+      '            return',
+      '        }',
+      '        val wm = getSystemService(WINDOW_SERVICE) as WindowManager',
+      '        manager = wm',
+      '        val view = TextView(this).apply {',
+      '            text = "AI"',
+      '            textSize = 15f',
+      '            typeface = Typeface.DEFAULT_BOLD',
+      '            gravity = Gravity.CENTER',
+      '            setTextColor(Color.parseColor("#08131F"))',
+      '            setBackgroundColor(Color.parseColor("#FFC24B"))',
+      '            setPadding(dp(12), dp(12), dp(12), dp(12))',
+      '            setOnClickListener { openPanel() }',
+      '        }',
+      '        wm.addView(view, params(false))',
+      '        bubble = view',
+      '    }',
+      '',
+      '    private fun openPanel() {',
+      '        val wm = manager ?: return',
+      '        bubble?.let { view -> runCatching { wm.removeView(view) } }',
+      '        bubble = null',
+      '',
+      '        val root = LinearLayout(this).apply {',
+      '            orientation = LinearLayout.VERTICAL',
+      '            setBackgroundColor(Color.parseColor("#F2081118"))',
+      '            setPadding(dp(12), dp(10), dp(12), dp(10))',
+      '        }',
+      '        root.layoutParams = LinearLayout.LayoutParams(dp(310), LinearLayout.LayoutParams.WRAP_CONTENT)',
+      '',
+      '        val header = LinearLayout(this).apply {',
+      '            orientation = LinearLayout.HORIZONTAL',
+      '            gravity = Gravity.CENTER_VERTICAL',
+      '        }',
+      '        val title = TextView(this).apply {',
+      '            text = "AI Phone"',
+      '            textSize = 16f',
+      '            typeface = Typeface.DEFAULT_BOLD',
+      '            setTextColor(Color.parseColor("#FFD37A"))',
+      '        }',
+      '        header.addView(title, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))',
+      '        val close = TextView(this).apply {',
+      '            text = "✕"',
+      '            textSize = 15f',
+      '            setTextColor(Color.parseColor("#E6EDF3"))',
+      '            setPadding(dp(10), 0, dp(2), 0)',
+      '            setOnClickListener { closePanel() }',
+      '        }',
+      '        header.addView(close)',
+      '        root.addView(header)',
+      '',
+      '        val log = TextView(this).apply {',
+      '            textSize = 12f',
+      '            setTextColor(Color.parseColor("#CDE7FF"))',
+      '            maxLines = 12',
+      '            movementMethod = ScrollingMovementMethod()',
+      '            setPadding(0, dp(6), 0, dp(6))',
+      '        }',
+      '        root.addView(log, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(190)))',
+      '',
+      '        val row = LinearLayout(this).apply {',
+      '            orientation = LinearLayout.HORIZONTAL',
+      '            gravity = Gravity.CENTER_VERTICAL',
+      '        }',
+      '        val input = EditText(this).apply {',
+      '            hint = "បញ្ជា: បើក tiktok អូស 20"',
+      '            textSize = 13f',
+      '            isSingleLine = true',
+      '            imeOptions = EditorInfo.IME_ACTION_SEND',
+      '            setTextColor(Color.parseColor("#E6EDF3"))',
+      '            setHintTextColor(Color.parseColor("#7A889B"))',
+      '        }',
+      '        row.addView(input, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))',
+      '        val send = Button(this).apply { text = "➤" }',
+      '        row.addView(send)',
+      '        root.addView(row)',
+      '',
+      '        wm.addView(root, params(true))',
+      '        panel = root',
+      '        logView = log',
+      '',
+      '        send.setOnClickListener {',
+      '            val command = input.text.toString().trim()',
+      '            if (command.isEmpty()) return@setOnClickListener',
+      '            input.setText("")',
+      '            append("អ្នក: " + command)',
+      '            AgentRunner.run(this, command) { line -> append(line) }',
+      '        }',
+      '    }',
+      '',
+      '    private fun closePanel() {',
+      '        panel?.let { view -> manager?.let { runCatching { it.removeView(view) } } }',
+      '        panel = null',
+      '        logView = null',
+      '        showBubble()',
+      '    }',
+      '',
+      '    private fun append(line: String) {',
+      '        ui.post {',
+      '            val view = logView ?: return@post',
+      '            view.append(if (view.text.isEmpty()) line else "\\n" + line)',
+      '        }',
+      '    }',
+      '',
+      '    override fun onDestroy() {',
+      '        AgentLog.sink = null',
+      '        bubble?.let { view -> manager?.let { runCatching { it.removeView(view) } } }',
+      '        panel?.let { view -> manager?.let { runCatching { it.removeView(view) } } }',
+      '        bubble = null',
+      '        panel = null',
+      '        super.onDestroy()',
+      '    }',
+      '',
+      '    companion object {',
+      '        private const val CHANNEL_ID = "ai_phone"',
+      '        private const val NOTIFICATION_ID = 77',
+      '    }',
+      '}',
+      ''
+    ].join('\n');
+  }
+
   function gitignore() {
     return [
       '*.iml',
@@ -1348,7 +1830,7 @@
     if (c.template === 'desc') return buildDescProject(c);
     const files = [];
     const add = (path, text) => files.push({ path: path, text: text });
-    const hasInternet = c.template === 'webview';
+    const hasInternet = c.template === 'webview' || c.template === 'agent';
 
     add('settings.gradle.kts', settingsGradle(c));
     add('build.gradle.kts', rootGradle());
@@ -1394,6 +1876,15 @@
       add(srcDir + '/BootReceiver.kt', bootReceiverKt(c));
       add('app/src/main/res/layout/activity_system.xml', activitySystemXml());
       add('app/src/main/res/xml/device_admin.xml', deviceAdminXml());
+    } else if (c.template === 'agent') {
+      const extra = agentExtra();
+      add(srcDir + '/MainActivity.kt', mainActivityAgent(c));
+      add(srcDir + '/OverlayService.kt', overlayAgentKt(c));
+      add(srcDir + '/AgentAccessibilityService.kt', agentAccessibilityKt(c));
+      if (typeof extra.groqClientKt === 'function') add(srcDir + '/GroqClient.kt', extra.groqClientKt(c));
+      if (typeof extra.agentRunnerKt === 'function') add(srcDir + '/AgentRunner.kt', extra.agentRunnerKt(c));
+      add('app/src/main/res/layout/activity_agent.xml', activityAgentXml());
+      add('app/src/main/res/xml/accessibility_config.xml', accessibilityConfigXml());
     } else {
       add(srcDir + '/MainActivity.kt', mainActivityBlank(c));
       add('app/src/main/res/layout/activity_main.xml', activityBlankXml(c));
@@ -2453,6 +2944,19 @@
       ['OverlayService.kt', 'SystemOps.kt', 'AdminReceiver.kt', 'BootReceiver.kt'].forEach((f) => {
         if (!files.some((x) => x.path.endsWith('/' + f))) issues.push('ខ្វះ ' + f);
       });
+    }
+    if (cfg.template === 'agent') {
+      ['INTERNET', 'SYSTEM_ALERT_WINDOW', 'FOREGROUND_SERVICE_SPECIAL_USE', 'QUERY_ALL_PACKAGES'].forEach((p) => {
+        if (!manifest.includes('android.permission.' + p)) issues.push('ខ្វះ permission ' + p);
+      });
+      if (!manifest.includes('.AgentAccessibilityService')) issues.push('ខ្វះ service AgentAccessibilityService');
+      if (!manifest.includes('BIND_ACCESSIBILITY_SERVICE')) issues.push('ខ្វះ BIND_ACCESSIBILITY_SERVICE');
+      ['OverlayService.kt', 'AgentAccessibilityService.kt', 'AgentRunner.kt', 'GroqClient.kt'].forEach((f) => {
+        if (!files.some((x) => x.path.endsWith('/' + f))) issues.push('ខ្វះ ' + f);
+      });
+      if (!files.some((x) => x.path === 'app/src/main/res/xml/accessibility_config.xml')) {
+        issues.push('ខ្វះ res/xml/accessibility_config.xml ដែល manifest យោង');
+      }
     }
     const themes = map['app/src/main/res/values/themes.xml'] || '';
     if (manifest.includes('@style/' + theme) && !themes.includes('name="' + theme + '"')) {

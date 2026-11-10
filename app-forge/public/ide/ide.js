@@ -799,6 +799,7 @@
     javaNative: { label: 'Native Android (Java)', gen: 'java' },
     ndkCpp: { label: 'C/C++ Android NDK', gen: 'ndk' },
     systemApp: { label: 'System App (Android)', gen: 'system' },
+    aiPhone: { label: 'AI Phone (Groq)', gen: 'agent' },
     blank: {
       label: 'Blank Web App',
       files: {

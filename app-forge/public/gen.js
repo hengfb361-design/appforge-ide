@@ -1199,16 +1199,25 @@
   let AGENT_EXTRA = null;
   function agentExtra() {
     if (AGENT_EXTRA) return AGENT_EXTRA;
+    const parts = {};
+    const take = (value) => {
+      if (value && typeof value === 'object') {
+        Object.keys(value).forEach((key) => { parts[key] = value[key]; });
+      }
+    };
     try {
       if (typeof module === 'object' && module.exports && typeof require === 'function') {
-        AGENT_EXTRA = require('./agent.js');
-      } else if (typeof self !== 'undefined' && self.AppForgeAgent) {
-        AGENT_EXTRA = self.AppForgeAgent;
+        take(require('./agent.js'));
+        try { take(require('./agentui.js')); } catch (e) { /* optional hands */ }
+      } else if (typeof self !== 'undefined') {
+        take(self.AppForgeAgent);
+        take(self.AppForgeAgentUI);
       }
     } catch (e) {
-      AGENT_EXTRA = null;
+      /* the built-in simpler overlay still generates an app that builds */
     }
-    return AGENT_EXTRA || {};
+    AGENT_EXTRA = parts;
+    return AGENT_EXTRA;
   }
 
   function accessibilityConfigXml() {
@@ -1547,9 +1556,14 @@
       'import android.accessibilityservice.GestureDescription',
       'import android.content.Intent',
       'import android.graphics.Path',
+      'import android.graphics.Rect',
+      'import android.os.Build',
+      'import android.os.Bundle',
       'import android.view.accessibility.AccessibilityEvent',
+      'import android.view.accessibility.AccessibilityNodeInfo',
       '',
-      '/** The hands of the agent: launch a package, swipe, go back or home. */',
+      '/** The hands of the agent: launch a package, tap by text, type, swipe,',
+      '    read the screen and the three global actions. */',
       'class AgentAccessibilityService : AccessibilityService() {',
       '    override fun onServiceConnected() {',
       '        super.onServiceConnected()',
@@ -1879,8 +1893,8 @@
     } else if (c.template === 'agent') {
       const extra = agentExtra();
       add(srcDir + '/MainActivity.kt', mainActivityAgent(c));
-      add(srcDir + '/OverlayService.kt', overlayAgentKt(c));
-      add(srcDir + '/AgentAccessibilityService.kt', agentAccessibilityKt(c));
+      add(srcDir + '/OverlayService.kt', (extra.overlayKt || overlayAgentKt)(c));
+      add(srcDir + '/AgentAccessibilityService.kt', (extra.agentAccessibilityKt || agentAccessibilityKt)(c));
       if (typeof extra.groqClientKt === 'function') add(srcDir + '/GroqClient.kt', extra.groqClientKt(c));
       if (typeof extra.agentRunnerKt === 'function') add(srcDir + '/AgentRunner.kt', extra.agentRunnerKt(c));
       add('app/src/main/res/layout/activity_agent.xml', activityAgentXml());

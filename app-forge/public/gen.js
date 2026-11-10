@@ -1229,6 +1229,7 @@
       '    android:accessibilityFlags="flagDefault|flagRetrieveInteractiveWindows"',
       '    android:canPerformGestures="true"',
       '    android:canRetrieveWindowContent="true"',
+      '    android:canTakeScreenshot="true"',
       '    android:description="@string/accessibility_description"',
       '    android:notificationTimeout="100" />',
       ''

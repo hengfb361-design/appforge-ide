@@ -2775,6 +2775,19 @@
     const fixes = [];
     const out = list.map((f) => Object.assign({}, f));
 
+    // A project built before the JVM block fix can still carry invalid Kotlin
+    // DSL on disk ("sourceCompatibility JavaVersion..." with no "=" and
+    // "jvmTarget = '17'"). Repair that copy too, so pressing Build again never
+    // resends the same broken script.
+    out.forEach((f) => {
+      if (typeof f.text !== 'string' || !/(^|\/)build\.gradle(\.kts)?$/.test(f.path)) return;
+      const before = f.text;
+      f.text = f.text
+        .replace(/\b(sourceCompatibility|targetCompatibility)\s+JavaVersion\./g, '$1 = JavaVersion.')
+        .replace(/\bjvmTarget\s*=\s*'(\d+)'/g, 'jvmTarget = "$1"');
+      if (f.text !== before) fixes.push(f.path + ': កែ syntax JVM (compileOptions/jvmTarget)');
+    });
+
     const original = {};
     out.forEach((f) => {
       if (typeof f.text !== 'string' || !/\.(kt|java)$/.test(f.path)) return;

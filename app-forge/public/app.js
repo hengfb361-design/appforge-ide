@@ -206,12 +206,17 @@
      network level ("Failed to fetch"). Wake it first, then retry with the same
      repo name' so a retry never creates a duplicate repo. */
   async function wakeServer() {
-    for (let i = 0; i < 15; i++) {
+    // A cold Render instance can take ~50s to answer, so each probe gets its own
+    // timeout and the loop waits a bit longer than a cold start (not a hang).
+    for (let i = 0; i < 6; i++) {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 20000);
       try {
-        const r = await fetch('/api/appforge/ready', { cache: 'no-store' });
+        const r = await fetch('/api/appforge/ready', { cache: 'no-store', signal: ctrl.signal });
+        clearTimeout(timer);
         if (r.ok) return true;
-      } catch (e) { /* still waking */ }
-      await sleep(1500);
+      } catch (e) { clearTimeout(timer); /* still waking */ }
+      await sleep(2000);
     }
     return false;
   }

@@ -200,7 +200,59 @@
     return base.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'app';
   }
 
-  function autoBuild() {
+  function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
+
+  /* Render's free instance sleeps; a cold start can make the POST fail at the
+     network level ("Failed to fetch"). Wake it first, then retry with the same
+     repo name' so a retry never creates a duplicate repo. */
+  async function wakeServer() {
+    for (let i = 0; i < 15; i++) {
+      try {
+        const r = await fetch('/api/appforge/ready', { cache: 'no-store' });
+        if (r.ok) return true;
+      } catch (e) { /* still waking */ }
+      await sleep(1500);
+    }
+    return false;
+  }
+
+  async function postBuild(body) {
+    const data = JSON.stringify(body);
+    let last = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 120000);
+        const res = await fetch('/api/appforge/build', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: data,
+          signal: ctrl.signal
+        });
+        clearTimeout(timer);
+        const raw = await res.text();
+        let d = {};
+        try { d = raw ? JSON.parse(raw) : {}; } catch (e) { d = {}; }
+        if (!res.ok) throw new Error(d.detail || ('HTTP ' + res.status + (raw ? ': ' + raw.slice(0, 140) : '')));
+        if (!d.repo) throw new Error('Server មិនបានបង្កើត repo — សាកម្តងទៀត');
+        return d;
+      } catch (err) {
+        last = err;
+        if (err && err.name === 'AbortError') throw new Error('Server យឺតពេក — សាកម្តងទៀត');
+        if (attempt < 2) {
+          setBuild('🔁 ភ្ជាប់ server ឡើងវិញ… (' + (attempt + 2) + '/3)');
+          await sleep(2000 * (attempt + 1));
+          await wakeServer();
+          continue;
+        }
+      }
+    }
+    throw new Error('ភ្ជាប់ server មិនបាន' +
+      (last && last.message ? ' (' + last.message + ')' : '') +
+      ' — ពិនិត្យអ៊ីនធឺណិត រួចចុច Build ម្តងទៀត');
+  }
+
+  async function autoBuild() {
     if (!state.result || state.auto.busy) return;
     state.auto.busy = true;
     el.autoBuild.disabled = true;
@@ -210,23 +262,17 @@
       private: false,
       files: state.result.files.map((f) => ({ path: f.path, text: f.text }))
     };
-    fetch('/api/appforge/build', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    })
-      .then((res) => res.json().catch(() => ({})).then((d) => ({ res: res, d: d })))
-      .then((r) => {
-        if (!r.res.ok) throw new Error(r.d.detail || ('HTTP ' + r.res.status));
-        state.auto.repo = r.d.repo;
-        setBuild('⏳ កំពុង build APK… <a href="' + esc((r.d.url || '') + '/actions') + '" target="_blank" rel="noopener">មើល Actions</a>');
-        pollBuild();
-      })
-      .catch((err) => {
-        setBuild('⚠️ ' + esc(err.message || String(err)));
-        state.auto.busy = false;
-        el.autoBuild.disabled = false;
-      });
+    try {
+      await wakeServer();
+      const d = await postBuild(body);
+      state.auto.repo = d.repo;
+      setBuild('⏳ កំពុង build APK… <a href="' + esc((d.url || '') + '/actions') + '" target="_blank" rel="noopener">មើល Actions</a>');
+      pollBuild();
+    } catch (err) {
+      setBuild('⚠️ ' + esc(err.message || String(err)));
+      state.auto.busy = false;
+      el.autoBuild.disabled = false;
+    }
   }
 
   function pollBuild() {

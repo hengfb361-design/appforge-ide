@@ -127,6 +127,65 @@
     return data;
   }
 
+  function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
+
+  /* Render's free instance sleeps; a cold start answers the POST slowly or not
+     at all, which the browser reports as "Failed to fetch". Wake it first, then
+     retry the build POST. The repo name is fixed per attempt, so a retry after a
+     lost response reuses the same repo instead of creating a duplicate. */
+  async function wakeServer() {
+    for (let i = 0; i < 15; i++) {
+      try {
+        const r = await fetch('/api/appforge/ready', { cache: 'no-store' });
+        if (r.ok) return true;
+      } catch (e) { /* still waking */ }
+      await sleep(1500);
+    }
+    return false;
+  }
+
+  async function postBuildWithRetry(payload) {
+    const body = JSON.stringify(payload);
+    let last = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 120000);
+        const r = await fetch('/api/appforge/build', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: body,
+          signal: ctrl.signal
+        });
+        clearTimeout(timer);
+        const raw = await r.text();
+        let data = {};
+        try { data = raw ? JSON.parse(raw) : {}; } catch (e) { data = {}; }
+        if (!r.ok) {
+          throw new Error(data.detail || ('Server ' + r.status +
+            (raw ? ': ' + raw.slice(0, 140) : ' — មិនបានឆ្លើយតប')));
+        }
+        if (!data.repo) throw new Error('Server មិនបានបង្កើត repo — សាកម្តងទៀត');
+        return data;
+      } catch (err) {
+        last = err;
+        if (err && err.name === 'AbortError') {
+          throw new Error('Server យឺតពេក — សាកម្តងទៀត');
+        }
+        if (attempt < 2) {
+          const stateEl = $('#buildState');
+          if (stateEl) stateEl.textContent = '🔁 ភ្ជាប់ server ឡើងវិញ… (' + (attempt + 2) + '/3)';
+          await sleep(2000 * (attempt + 1));
+          await wakeServer();
+          continue;
+        }
+      }
+    }
+    throw new Error('ភ្ជាប់ server មិនបាន' +
+      (last && last.message ? ' (' + last.message + ')' : '') +
+      ' — ពិនិត្យអ៊ីនធឺណិត រួចចុច Build ម្តងទៀត');
+  }
+
   function projectApi(suffix) {
     return '/api/ide/project/' + state.proj.id + (suffix || '');
   }
@@ -1131,19 +1190,8 @@
         files: result.files,
         private: false
       };
-      const r = await fetch('/api/appforge/build', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
-      });
-      // A proxy can cut a long request and leave an empty body; never let that
-      // surface as "Unexpected end of JSON input".
-      const raw = await r.text();
-      let data = {};
-      try { data = raw ? JSON.parse(raw) : {}; } catch (e) { data = {}; }
-      if (!r.ok) {
-        throw new Error(data.detail || ('Server ' + r.status +
-          (raw ? ': ' + raw.slice(0, 140) : ' — មិនបានឆ្លើយតប (សាកម្តងទៀត)')));
-      }
-      if (!data.repo) throw new Error('Server មិនបានបង្កើត repo — សាកម្តងទៀត');
+      await wakeServer();
+      const data = await postBuildWithRetry(payload);
       state.build.repo = data.repo;
       state.build.url = data.url;
       $('#repoLink').href = data.url;
@@ -1243,7 +1291,17 @@
   async function refreshLogs() {
     if (!state.build.repo) return toast('មិនទាន់មាន build', 'err');
     try {
-      const r = await fetch('/api/appforge/logs?repo=' + encodeURIComponent(state.build.repo));
+      let r = null;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          r = await fetch('/api/appforge/logs?repo=' + encodeURIComponent(state.build.repo), { cache: 'no-store' });
+          break;
+        } catch (netErr) {
+          if (attempt === 2) throw netErr;
+          await sleep(1500 * (attempt + 1));
+          await wakeServer();
+        }
+      }
       const d = await r.json();
       if (!r.ok) throw new Error(d.detail || ('HTTP ' + r.status));
       $('#buildlog').textContent = d.logs || '(គ្មាន log)';

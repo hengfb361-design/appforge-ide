@@ -2116,10 +2116,10 @@
       if (noOptions || noJvm) {
         const block = ['', 'android {'];
         if (noOptions) {
-          block.push('    compileOptions {', '        sourceCompatibility JavaVersion.VERSION_17',
-            '        targetCompatibility JavaVersion.VERSION_17', '    }');
+          block.push('    compileOptions {', '        sourceCompatibility = JavaVersion.VERSION_17',
+            '        targetCompatibility = JavaVersion.VERSION_17', '    }');
         }
-        if (noJvm) block.push('    kotlinOptions {', "        jvmTarget = '17'", '    }');
+        if (noJvm) block.push('    kotlinOptions {', '        jvmTarget = "17"', '    }');
         block.push('}');
         appScript.text = t.replace(/\s*$/, '\n') + block.join('\n') + '\n';
       }
